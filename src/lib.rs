@@ -2,5 +2,5 @@
 pub mod entity;
 pub mod communication;
 mod utils;
-mod hooks;
+pub mod hooks;
 mod views;
