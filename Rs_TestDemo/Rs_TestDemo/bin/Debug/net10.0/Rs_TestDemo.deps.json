@@ -1,0 +1,23 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "Rs_TestDemo/1.0.0": {
+        "runtime": {
+          "Rs_TestDemo.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Rs_TestDemo/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
