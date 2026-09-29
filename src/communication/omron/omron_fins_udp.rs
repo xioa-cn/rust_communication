@@ -71,7 +71,7 @@ impl FinsTransport for UdpTransport {
         let socket = self
             .socket
             .as_ref()
-            .ok_or("Omron FINS UDP is not connected")?;
+            .ok_or("Omron.cs FINS UDP is not connected")?;
         socket
             .set_write_timeout(Some(remaining(deadline)?))
             .map_err(io_error)?;

@@ -97,7 +97,7 @@ macro_rules! numeric_value {
         $(impl OmronValue for $value_type {
             const BYTE_LEN: usize = std::mem::size_of::<Self>();
             fn from_be_bytes(bytes: &[u8]) -> Result<Self, String> {
-                let bytes = bytes.try_into().map_err(|_| "Omron scalar byte length mismatch")?;
+                let bytes = bytes.try_into().map_err(|_| "Omron.cs scalar byte length mismatch")?;
                 Ok(<$value_type>::from_be_bytes(bytes))
             }
             fn to_be_bytes(&self) -> Vec<u8> { <$value_type>::to_be_bytes(*self).to_vec() }
@@ -114,7 +114,7 @@ impl OmronValue for bool {
         match bytes {
             [0] => Ok(false),
             [1] => Ok(true),
-            _ => Err("Omron bit payload must be zero or one".into()),
+            _ => Err("Omron.cs bit payload must be zero or one".into()),
         }
     }
     fn to_be_bytes(&self) -> Vec<u8> {
@@ -127,7 +127,7 @@ impl OmronReadValue for String {
     const IS_STRING: bool = true;
     fn from_be_bytes(bytes: &[u8]) -> Result<Self, String> {
         String::from_utf8(bytes.to_vec())
-            .map_err(|error| format!("Omron string is not valid UTF-8: {error}"))
+            .map_err(|error| format!("Omron.cs string is not valid UTF-8: {error}"))
     }
 }
 

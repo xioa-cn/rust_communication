@@ -37,7 +37,7 @@ export const deviceGroups: DeviceGroup[] = [
     ],
   },
   {
-    id: 'omron', label: '欧姆龙', description: 'Omron · FINS · CS / CJ / CP',
+    id: 'omron', label: '欧姆龙', description: 'Omron.cs · FINS · CS / CJ / CP',
     devices: [
       { id: 'omron-fins-tcp', label: 'FINS · TCP', protocols: ['omron_fins_tcp'] },
       { id: 'omron-fins-udp', label: 'FINS · UDP', protocols: ['omron_fins_udp'] },

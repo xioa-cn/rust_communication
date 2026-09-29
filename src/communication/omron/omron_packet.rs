@@ -118,7 +118,7 @@ pub(super) fn end_code_message(code: u16) -> String {
         0x2101 => "write protected",
         _ => "controller rejected the command or reported a status error",
     };
-    format!("Omron FINS end code 0x{code:04X}: {reason}")
+    format!("Omron.cs FINS end code 0x{code:04X}: {reason}")
 }
 
 pub(super) fn tcp_frame(command: u32, payload: &[u8]) -> Vec<u8> {

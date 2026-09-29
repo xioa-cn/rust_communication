@@ -7,9 +7,9 @@ import { batchRequest, batchWriteRequest } from '../src/batchBuffer.ts'
 import { generateRustExample } from '../src/rustExamples.ts'
 import { parseBatch } from '../src/workbench.ts'
 
-test('Omron has independent TCP/UDP leaves with FINS defaults', () => {
+test('Omron.cs has independent TCP/UDP leaves with FINS defaults', () => {
   assert.deepEqual(filterDeviceGroups('欧姆龙')[0].devices.map(device => device.id), ['omron-fins-tcp', 'omron-fins-udp'])
-  assert.equal(filterDeviceGroups('Omron')[0].id, 'omron')
+  assert.equal(filterDeviceGroups('Omron.cs')[0].id, 'omron')
   assert.equal(filterDeviceGroups('FINS')[0].devices.length, 2)
   const tcp = createDeviceConnection('omron-fins-tcp'), udp = createDeviceConnection('omron-fins-udp')
   assert.equal(tcp.port, 9600)
@@ -27,7 +27,7 @@ test('Omron has independent TCP/UDP leaves with FINS defaults', () => {
   }
 })
 
-test('Omron uses CIO bit addresses and enables bytes and raw text, not S7 headers', () => {
+test('Omron.cs uses CIO bit addresses and enables bytes and raw text, not S7 headers', () => {
   for (const protocol of ['omron_fins_tcp', 'omron_fins_udp'] as const) {
     assert.equal(defaultAddress(protocol, 'bool'), 'CIO100.0')
     assert.equal(defaultAddress(protocol, 'u32'), 'D100')
@@ -43,7 +43,7 @@ test('Omron uses CIO bit addresses and enables bytes and raw text, not S7 header
   }
 })
 
-test('Omron batch bytes and point tables retain actual addresses and request shapes', () => {
+test('Omron.cs batch bytes and point tables retain actual addresses and request shapes', () => {
   const request = batchRequest('omron_fins_tcp', 'E0.100', 3)
   assert.deepEqual(request, { address: 'E0.100', dataType: 'u8', length: 3 })
   const write = batchWriteRequest('omron_fins_tcp', request, 3, '41 42 43')
@@ -56,7 +56,7 @@ test('Omron batch bytes and point tables retain actual addresses and request sha
   assert.equal(points[0].dataType, 'bool')
 })
 
-test('Omron Rust creation uses the real route and byte order APIs', () => {
+test('Omron.cs Rust creation uses the real route and byte order APIs', () => {
   for (const id of ['omron-fins-tcp', 'omron-fins-udp']) {
     const config = createDeviceConnection(id)
     config.host = '192.0.2.10'

@@ -25,19 +25,19 @@ impl NetworkSettings {
     }
     pub fn durations(&self) -> Result<(Duration, Duration), String> {
         if self.peer.port() == 0 {
-            return Err("Omron port must be greater than zero".into());
+            return Err("Omron.cs port must be greater than zero".into());
         }
         if !self.peer.is_ipv4()
             || self.peer.ip().is_unspecified()
             || self.peer.ip().is_multicast()
             || self.peer.ip() == IpAddr::V4(std::net::Ipv4Addr::BROADCAST)
         {
-            return Err("Omron FINS requires a unicast IPv4 peer".into());
+            return Err("Omron.cs FINS requires a unicast IPv4 peer".into());
         }
         let connect = self.timeout.connect_time_out();
         let receive = self.timeout.receive_time_out();
         if connect <= 0 || receive <= 0 {
-            return Err("Omron timeouts must be greater than zero".into());
+            return Err("Omron.cs timeouts must be greater than zero".into());
         }
         Ok((
             Duration::from_millis(connect as u64),
@@ -47,13 +47,13 @@ impl NetworkSettings {
 }
 
 pub(super) fn io_error(error: std::io::Error) -> String {
-    format!("Omron FINS I/O error: {error}")
+    format!("Omron.cs FINS I/O error: {error}")
 }
 
 pub(super) fn remaining(deadline: Instant) -> Result<Duration, String> {
     let duration = deadline.saturating_duration_since(Instant::now());
     if duration.is_zero() {
-        return Err("Omron FINS transaction timed out".into());
+        return Err("Omron.cs FINS transaction timed out".into());
     }
     Ok(duration)
 }
@@ -69,7 +69,7 @@ pub(super) fn tcp_write(
             .set_write_timeout(Some(remaining(deadline)?))
             .map_err(io_error)?;
         match stream.write(&bytes[sent..]) {
-            Ok(0) => return Err("Omron TCP socket stopped accepting data".into()),
+            Ok(0) => return Err("Omron.cs TCP socket stopped accepting data".into()),
             Ok(count) => sent += count,
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(error) => return Err(io_error(error)),
@@ -89,7 +89,7 @@ pub(super) fn tcp_read(
             .set_read_timeout(Some(remaining(deadline)?))
             .map_err(io_error)?;
         match stream.read(&mut bytes[received..]) {
-            Ok(0) => return Err("Omron TCP peer closed the connection".into()),
+            Ok(0) => return Err("Omron.cs TCP peer closed the connection".into()),
             Ok(count) => received += count,
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(error) => return Err(io_error(error)),

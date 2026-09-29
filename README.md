@@ -136,6 +136,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 当前模块路径为 `communication::inovace`，导入时请沿用该拼写。汇川客户端默认站号为 1、数值字序为 `CDAB`；系列与字序必须匹配目标 PLC。
 
+## C# / .NET 接入
+
+本库同时提供原生 DLL 的 C ABI 接口，可在 C# 中通过 P/Invoke 使用现有 PLC 通讯能力：
+
+```powershell
+cargo build --release --lib
+```
+
+Windows 默认生成 `target/release/rs_appliaction.dll`。将 DLL 放入 C# 程序输出目录，并将 `src/hooks/CSharp` 下的 `.cs` 文件加入项目。C# 按品牌封装为独立文件：[Melsec.cs](src/hooks/CSharp/Melsec.cs)、[Omron.cs](src/hooks/CSharp/Omron.cs)、[Siemens.cs](src/hooks/CSharp/Siemens.cs)、[Inovance.cs](src/hooks/CSharp/Inovance.cs)，通用 Modbus 使用 [Modbus.cs](src/hooks/CSharp/Modbus.cs)。
+
+```csharp
+using var plc = new RsCommunication.Melsec("192.168.0.10", 6000);
+var connect = plc.Connect();
+if (!connect.IsSuccess)
+{
+    Console.WriteLine($"连接失败 [{connect.ErrorCode}]：{connect.Message}");
+    return;
+}
+var read = plc.Read<short>("D100");
+Console.WriteLine(read.IsSuccess ? $"D100 = {read.Content}" : $"读取失败：{read.Message}");
+```
+
+各品牌统一使用 `Read<T>`、`Write<T>`、`WriteAll<T>` 和字符串方法；连接及读写返回 `PlcResult` / `PlcResult<T>`，包含 `IsSuccess`、`ErrorCode`、`Message`，有数据的结果另带 `Content`，先判断成功再取数据。使用 `using` 自动释放；原生句柄、缓冲区及 P/Invoke 声明封装在内部，不改变现有 Rust API。
+
+配置说明、C# 调用示例、缓冲区契约和测试命令见 **[C# 接入文档](src/hooks/CSharp/README.md)**。原生实现位于 [src/hooks/csharp_dll.rs](src/hooks/csharp_dll.rs)。
+
 ## 各协议的地址与使用约定
 
 ### 西门子 S7
@@ -225,6 +251,8 @@ rs_appliaction/
 │   │   ├── omron/          欧姆龙 FINS
 │   │   ├── modbus/         Modbus TCP / UDP / RTU / ASCII
 │   │   └── inovace/        汇川内置 Modbus TCP
+│   ├── hooks/csharp_dll.rs C ABI / C# DLL 接口
+│   ├── hooks/CSharp/       C# P/Invoke 声明与接入文档
 │   └── entity/operate.rs   统一操作结果 Operator<T>
 ├── tests/                  协议、数据转换与通讯测试
 └── demo/                   Tauri + Vue PLC 通讯工作台

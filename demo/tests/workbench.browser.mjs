@@ -517,7 +517,7 @@ try {
     await waitFor('!window.__status.connected')
     await click('.connection-dialog .n-card-header__close')
   }
-  console.log('PASS: Omron TCP/UDP routes, drafts, validation, locked fields, IO, batch bytes, Rust examples and single-screen layout')
+  console.log('PASS: Omron.cs TCP/UDP routes, drafts, validation, locked fields, IO, batch bytes, Rust examples and single-screen layout')
   await clickText('.device-group-list', '汇川5')
   const inovanceModels = [['AM / AC / AP', 'AM'], ['AM / AC / AP', 'AC'], ['AM / AC / AP', 'AP'], ['EVO', 'EVO'], ['H3U', 'H3U'], ['H5U', 'H5U'], ['Easy', 'Easy']]
   for (const [index, [label, series]] of inovanceModels.entries()) {

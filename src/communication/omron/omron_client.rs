@@ -33,7 +33,7 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
 
     pub fn set_route(&mut self, route: FinsRoute) -> Operator<bool> {
         if self.is_connected() {
-            return Operator::err("Disconnect Omron before changing the FINS route");
+            return Operator::err("Disconnect Omron.cs before changing the FINS route");
         }
         if let Err(error) = route.validate(false) {
             return Operator::err(&error);
@@ -59,7 +59,7 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
             let route = self.transport.connect(self.configured_route)?;
             route.validate(true)?;
             if !self.transport.is_connected() {
-                return Err("Omron transport did not establish a connection".into());
+                return Err("Omron.cs transport did not establish a connection".into());
             }
             self.active_route = Some(route);
             Ok(true)
@@ -157,7 +157,7 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
         let expected = value_length(Value::BYTE_LEN, Value::IS_BIT, Value::IS_STRING, 1)?;
         let bytes = value.encode();
         if !Value::IS_STRING && bytes.len() != expected {
-            return Err("Omron value encoding length mismatch".into());
+            return Err("Omron.cs value encoding length mismatch".into());
         }
         let address = Address::parse(address, Value::IS_BIT)?;
         self.write_bytes(address, bytes, Value::BYTE_LEN)
@@ -179,7 +179,7 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
         for value in values {
             let encoded = value.to_be_bytes();
             if encoded.len() != Value::BYTE_LEN {
-                return Err("Omron array element encoding length mismatch; no data written".into());
+                return Err("Omron.cs array element encoding length mismatch; no data written".into());
             }
             bytes.extend_from_slice(&encoded);
         }
@@ -201,14 +201,14 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
         address.validate_length(units)?;
         if address.is_bit {
             if bytes.iter().any(|byte| *byte > 1) {
-                return Err("Omron bit encoding must be zero or one; no data written".into());
+                return Err("Omron.cs bit encoding must be zero or one; no data written".into());
             }
         } else if width <= 1 {
             if !bytes.len().is_multiple_of(2) {
                 let mut tail = self
                     .read_units(address.advance(units - 1), 1)
                     .map_err(|error| {
-                        format!("Omron tail read failed; no bytes written: {error}")
+                        format!("Omron.cs tail read failed; no bytes written: {error}")
                     })?;
                 self.byte_order.apply_byte_stream(&mut tail);
                 bytes.push(tail[1]);
@@ -234,7 +234,7 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
     fn read_units(&mut self, address: Address, units: usize) -> Result<Vec<u8>, String> {
         address.validate_length(units)?;
         if !self.is_connected() {
-            return Err("Omron is not connected; call connect first".into());
+            return Err("Omron.cs is not connected; call connect first".into());
         }
         let mut bytes = Vec::with_capacity(units * if address.is_bit { 1 } else { 2 });
         let mut offset = 0;
@@ -253,7 +253,7 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
         data: Option<&[u8]>,
     ) -> Result<Vec<u8>, String> {
         if !self.is_connected() {
-            return Err("Omron is not connected; call connect first".into());
+            return Err("Omron.cs is not connected; call connect first".into());
         }
         self.sid = self.sid.wrapping_add(1);
         let request = memory_request(self.route(), self.sid, address, count, data);
@@ -295,20 +295,20 @@ fn value_length(
     count: usize,
 ) -> Result<usize, String> {
     if count == 0 {
-        return Err("Omron reads and writes require at least one value/byte".into());
+        return Err("Omron.cs reads and writes require at least one value/byte".into());
     }
     if is_string {
         if width != 0 || is_bit {
-            return Err("Omron string types require zero fixed width and word access".into());
+            return Err("Omron.cs string types require zero fixed width and word access".into());
         }
         return Ok(count);
     }
     if (is_bit && width != 1) || !matches!(width, 1 | 2 | 4 | 8) {
-        return Err("Omron values must have 1/2/4/8 bytes, or one byte for a bit".into());
+        return Err("Omron.cs values must have 1/2/4/8 bytes, or one byte for a bit".into());
     }
     count
         .checked_mul(width)
-        .ok_or_else(|| "Omron value length overflow".into())
+        .ok_or_else(|| "Omron.cs value length overflow".into())
 }
 
 impl<Transport: FinsTransport> DeviceBase for OmronClient<Transport> {

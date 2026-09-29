@@ -85,7 +85,7 @@ impl FinsTransport for TcpTransport {
         let stream = self
             .stream
             .as_mut()
-            .ok_or("Omron FINS TCP is not connected")?;
+            .ok_or("Omron.cs FINS TCP is not connected")?;
         tcp_write(stream, &tcp_frame(2, request), deadline)?;
         read_frame(stream, 2, deadline)
     }
