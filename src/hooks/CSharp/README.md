@@ -163,6 +163,75 @@ ASCII 使用 `Modbus.Ascii(openedStream, unitId: 1)`。客户端自动保留回�
 
 流仍由调用方拥有，客户端释放不会关闭传入的流。一个流只交给一个客户端；先释放客户端再关闭流。RTU 波特率必须与实际串口一致；串口超时由调用方设置。RTU/ASCII 断开或传输错误后，应重新创建客户端，不要直接对失效会话重连。
 
+## 高频读取与缓冲复用
+
+`Read<T>` 仍返回独立的结果数组；数值读取现在直接填充最终数组，单值读取不再创建临时单元素数组。原生层直接编码到调用方缓冲区，C ABI 版本及字序约定不变。包装层需要支持 `Span<T>` / `MemoryMarshal` 的运行时（.NET Standard 2.1 API，例如 .NET 6+）；无需开启 unsafe。
+
+连续轮询相同长度的数据时，可将数组放在轮询循环外，使用 `ReadInto<T>` 复用：
+
+```csharp
+short[] values = new short[100];
+var read = plc.ReadInto("1", values);
+if (!read.IsSuccess)
+    throw new InvalidOperationException(read.Message);
+Console.WriteLine($"读取元素数：{read.Content}，首个值：{values[0]}");
+```
+
+`destination.Length` 就是读取元素数，成功时 `Content` 返回该数量。每次调用都执行真实设备读取，不缓存旧数据。调用方拥有数组，不应由其他线程同时访问；下一次成功读取会覆盖数组，若需要历史快照需自行复制。失败时不要消费本次结果。此 API 消除重复的数据数组分配，但结果对象等仍有少量托管分配，并非完全零分配。
+
+同一客户端只有一个串行请求通道：多个 `Task` 共用该对象不会使单连接并行收发。不要删除安全锁；多连接并发应在设备允许的连接数和负载范围内单独测试。高频采集优先合并连续地址，不要将每个点都作为单独请求。
+
+性能比较应固定有效地址、类型和数量，预热相同批量调用，检查全部成功，并在 Release 下交替测试多轮。不能把越界失败计入成功吞吐，也不能用首次调用推断稳定延迟。仓库中的 `benchmarks/ModbusRead` 提供同进程 HSL 对比和托管互操作回归验证，只访问它自己启动的回环模拟器。
+
+## C# 缓冲区 API 升级（2026-09-30）
+
+以下接口由 `PlcClient` 统一提供，`Modbus`、`Inovance`、`Melsec`、`Omron`、`Siemens` 均可调用，不需要更换品牌类。现有 `Read<T>`、`Write<T>`、数组版 `ReadInto<T>` 和 `WriteAll<T>(params T[])` 保留原来的调用方式与返回类型。
+
+| 接口 | 用途 |
+| --- | --- |
+| `ReadInto<T>(string address, T[] destination, int offset, int count)` | 直接填充目标数组的指定区间 |
+| `ReadInto<T>(string address, Span<T> destination)` | 读取到数组切片或小型栈缓冲区 |
+| `WriteAll<T>(string address, T[] values, int offset, int count)` | 只写入源数组的指定区间，不必自行截取数组 |
+| `WriteAll<T>(string address, ReadOnlySpan<T> values)` | 写入只读切片或小型栈缓冲区 |
+
+四个新增重载均返回 `PlcResult<int>`；成功时 `Content` 是传输的 **T 类型元素个数，不是字节数**。数组重载中的 `offset/count` 也是元素单位，`count` 必须大于零且区间必须落在数组内。空 Span、空数组、无效区间及不支持的类型返回失败结果，不发送设备请求。
+
+以下 `plc` 是已经连接成功的品牌客户端，`address` 使用调用方已确认可读写的设备地址：
+
+```csharp
+short[] buffer = new short[256];
+var read = plc.ReadInto(address, buffer, offset: 16, count: 100);
+if (!read.IsSuccess)
+    throw new InvalidOperationException(read.Message);
+
+var write = plc.WriteAll(address, buffer, offset: 16, count: 100);
+if (!write.IsSuccess)
+    throw new InvalidOperationException(write.Message);
+```
+
+已有 Span 时可直接传递，不必调用 `ToArray()`。显式指定泛型参数可兼容较早的 C# Span 类型推断规则：
+
+```csharp
+Span<short> window = buffer.AsSpan(16, 100);
+var readWindow = plc.ReadInto<short>(address, window);
+if (!readWindow.IsSuccess)
+    throw new InvalidOperationException(readWindow.Message);
+
+var writeWindow = plc.WriteAll<short>(address, window);
+if (!writeWindow.IsSuccess)
+    throw new InvalidOperationException(writeWindow.Message);
+```
+
+小窗口也可以使用 `Span<short> window = stackalloc short[8]`。这些都是同步调用，Span 只在调用期间使用；不会保存 Span、原始指针或调用者数组供后台任务使用。不能跨 `await` 保持 Span，也不要在大量循环中反复 `stackalloc` 或为大批量数据使用栈分配。
+
+区间外的目标数据不改动，写入不修改源数据。调用期间不要让其他线程访问同一读缓冲区或修改写缓冲区。底层仍遵守同一套 FIFO、SafeHandle 保活、字序、超时、分包与错误处理规则；不是并行请求或自动合并读写。小端平台写入直接使用字节视图，大端平台保留字序转换副本。
+
+新接口避免临时切片数组，不代表整个调用零分配；当前 .NET 10 本地回归中四个新增重载的调用线程分配均为 40 B/次（结果对象），不包含原生层、服务端或调用方自己的分配，也不是速度承诺。
+
+C ABI 仍为 1，继续使用现有 `plc_read` / `plc_write` 导出。升级时同步本目录 C# 文件并重新编译应用；只替换原生 DLL 不会增加这些 C# 重载。共享 `PlcClient.cs` 和新增接口已同步到 Demo，用户的 `Program.cs` 不由本次升级修改。
+
+仓库原有的 Modbus 默认字序不同：本目录 `ModbusOptions` 为 `ABCD`，Demo 为 `CDAB`；本次升级保留该配置差异，不擅自改变已有数据解释。需要一致行为时，应显式设置 `ModbusOptions.ByteOrder` 并将 options 传给构造函数，而不是只创建一个未使用的 options 对象。Demo 的 `PlcNative.cs` 另有排版差异，接口功能通过直接编译 Demo 封装运行回归来验证，不要求整个目录逐文件哈希相同。
+
 ## 错误与线程
 
 操作方法中的参数校验、不支持的泛型类型、已释放对象及原生通讯失败返回 `IsSuccess == false`，不再要求业务代码捕获这些操作异常。原生状态码和原始错误信息会在当前线程立即复制到结果中，之后再调用其他方法也不会丢失。
@@ -181,9 +250,27 @@ ASCII 使用 `Modbus.Ascii(openedStream, unitId: 1)`。客户端自动保留回�
 
 这是 C# 返回类型的变更：原来的 `short value = plc.Read<short>(...)` 需改为检查结果再取 `Content`；原来仅调用 `Write(...)` 而不检查返回值的代码仍可编译，但会忽略失败，必须同步改造。Rust API 和原生 C ABI 不变。
 
-同一客户端的操作和释放会串行执行，不同客户端可以并行。调用是同步阻塞的，GUI 应放到工作线程执行。不要在串口流的读写回调中反过来调用同一 PLC 客户端。
+同一客户端的操作和释放会串行执行，不同客户端可以并行。竞争同一客户端时，已经进入等待队列的请求按 FIFO 顺序交接；刚完成一次调用的线程不能越过已排队的调用再次抢占。无竞争时直接进入，不分配等待节点。排队线程中断时会移除其等待节点，交接期间也不会丢失执行权；这不是取消已经发送的设备命令。
+
+成功完成等待的节点在线程内复用，避免高频争用时每次都新建等待对象；一个线程最多缓存一个节点，也可以用于该线程随后访问的另一个客户端。被中断的等待节点不回收，防止延迟到达的唤醒信号误用到下一次请求。FIFO、重入、释放和异常处理规则不变。
+
+公平交接仍有线程唤醒及排队开销，并不保证硬实时延迟或每个任务完全同时结束。调用是同步阻塞的，GUI 应放到工作线程执行。不要在串口流的读写回调中反过来调用同一 PLC 客户端。
 
 写入不自动重试，超时不代表 PLC 没有执行；分包写入可能只完成部分操作。请先在测试 PLC 或模拟器上验证，不能代替工业安全联锁。
+
+## 数值写入热路径
+
+数值/布尔 `Read`、`ReadInto`、`Write`、`WriteAll` 使用静态委托并显式传递参数，不再每次分配捕获地址、数量或数值的闭包。这是所有品牌共用的 C# 封装优化，API 和原生 ABI 不变；需要重新编译 C# 程序，只替换原生 DLL 不会生效。Demo 风格的 `Task.Run` 测试及尚未消除的延迟尖峰见 `benchmarks/ModbusRead/CSHARP_HOTPATH_RESULTS.md`。
+
+Windows 上的 Modbus TCP（含汇川封装）另外缓存已成功设置的 Socket 读/写超时选项，跳过实际毫秒值相同的重复设置；每次收发仍检查剩余事务期限。该缓存不保存 PLC 值，连接重建时重新初始化。30,000 次长循环及仍存在的最大延迟限制见 `benchmarks/ModbusRead/SOCKET_TIMEOUT_RESULTS.md`，不能承诺每次调用都比 HSL 快。
+
+`Write<T>` 直接传递局部标量的字节视图，不再构造单元素数组、临时 `byte[]` 和中间 `PlcResult<int>`。小端平台上的 `WriteAll<T>` 直接传递调用者数组的只读字节视图，移除 `Buffer.BlockCopy`；大端平台仍先转换副本，不会原地反转调用者数组。调用完成前不要从其他线程修改输入数组。字符串写入不在本次优化范围内。
+
+原生 ABI 的标量解码使用栈上值，仍通过 `from_le_bytes` 处理非对齐数据和布尔校验，不强制转换不可信指针。Modbus（包含汇川封装）、三菱、欧姆龙和 S7 的内置数值/布尔批量编码直接追加到预留缓冲，避免每个元素各分配一个临时 `Vec`；自定义数值类型保留原有编码方法作为默认回退。
+
+MC/FINS/S7 TCP 在连接内复用接收缓冲，写入确认也走同一路径；S7 直接重组 COTP 分段到最终响应，保留粘包中的剩余帧。FINS 保留整次事务期限，即使数据已缓冲也不能绕过超时。MC UDP 的 65,535 字节接收区改为每连接复用。这些都是报文缓冲，不缓存 PLC 数据，不跳过确认、不自动重试，也不移除公平锁。
+
+修改托管包装层后必须重新编译 C# 工程，不能只替换 DLL。性能对比、适用范围及尾延迟限制见仓库 `benchmarks/ModbusRead/WRITE_RESULTS.md`；不要把降低分配量的百分比直接当成通讯速度提升比例。
 
 ## 验证
 

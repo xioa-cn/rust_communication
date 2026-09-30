@@ -177,11 +177,11 @@ impl<Transport: FinsTransport> OmronClient<Transport> {
         })?;
         let mut bytes = Vec::with_capacity(length);
         for value in values {
-            let encoded = value.to_be_bytes();
-            if encoded.len() != Value::BYTE_LEN {
+            let offset = bytes.len();
+            value.append_be_bytes(&mut bytes);
+            if bytes.len().checked_sub(offset) != Some(Value::BYTE_LEN) {
                 return Err("Omron.cs array element encoding length mismatch; no data written".into());
             }
-            bytes.extend_from_slice(&encoded);
         }
         self.write_bytes(address, bytes, Value::BYTE_LEN)?;
         Ok(values.len())

@@ -7,14 +7,17 @@ pub use super::melsec_value::{MelsecReadValue, MelsecValue, MelsecWriteInput, Me
 use crate::communication::device_base::{DeviceBase, ReadBase, WriteBase};
 use crate::communication::timeout::Timeout;
 use crate::entity::operate::Operator;
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 
 /// 连接保存在实例中；可变借用保证一个实例上仅串行执行请求。
 enum Connection {
-    Tcp(TcpStream),
-    Udp(UdpSocket),
+    Tcp(BufReader<TcpStream>),
+    Udp {
+        socket: UdpSocket,
+        response: Box<[u8]>,
+    },
 }
 
 /// 七种公开客户端的共用实现；协议种类构造后不变。
@@ -67,7 +70,10 @@ impl MelsecClient {
             socket
                 .set_write_timeout(Some(io_timeout))
                 .map_err(io_error)?;
-            self.connection = Some(Connection::Udp(socket));
+            self.connection = Some(Connection::Udp {
+                socket,
+                response: vec![0; 65_535].into_boxed_slice(),
+            });
         } else {
             let socket = TcpStream::connect_timeout(
                 &SocketAddr::new(self.address, self.port),
@@ -81,7 +87,7 @@ impl MelsecClient {
                 .set_write_timeout(Some(io_timeout))
                 .map_err(io_error)?;
             socket.set_nodelay(true).map_err(io_error)?;
-            self.connection = Some(Connection::Tcp(socket));
+            self.connection = Some(Connection::Tcp(BufReader::new(socket)));
         }
         Ok(true)
     }
@@ -131,11 +137,11 @@ impl MelsecClient {
             .try_reserve_exact(byte_length)
             .map_err(|_| "MELSEC write allocation failed")?;
         for value in values {
-            let encoded = value.to_le_bytes();
-            if encoded.len() != T::BYTE_LEN {
+            let offset = bytes.len();
+            value.append_le_bytes(&mut bytes);
+            if bytes.len().checked_sub(offset) != Some(T::BYTE_LEN) {
                 return Err("Invalid MELSEC array element encoding length".into());
             }
-            bytes.extend_from_slice(&encoded);
         }
         self.write_data(address, bytes, T::IS_BIT)?;
         Ok(values.len())
@@ -261,7 +267,7 @@ impl MelsecClient {
     /// 先取走连接再关闭，保证关闭失败也不会继续复用旧 Socket。
     fn close(&mut self) {
         if let Some(Connection::Tcp(stream)) = self.connection.take() {
-            let _ = stream.shutdown(Shutdown::Both);
+            let _ = stream.get_ref().shutdown(Shutdown::Both);
         }
     }
 }
@@ -277,17 +283,15 @@ fn receive(
     write: bool,
 ) -> Result<Vec<u8>, String> {
     match connection {
-        Connection::Udp(socket) => {
+        Connection::Udp { socket, response } => {
             if socket.send(request).map_err(io_error)? != request.len() {
                 return Err("Incomplete MELSEC UDP send".into());
             }
-            let mut response = vec![0; 65_535];
-            let received = socket.recv(&mut response).map_err(io_error)?;
-            response.truncate(received);
-            Ok(response)
+            let received = socket.recv(response).map_err(io_error)?;
+            Ok(response[..received].to_vec())
         }
         Connection::Tcp(stream) => {
-            stream.write_all(request).map_err(io_error)?;
+            stream.get_mut().write_all(request).map_err(io_error)?;
             let header_len = protocol.header_len();
             let mut response = vec![0; header_len];
             stream.read_exact(&mut response).map_err(io_error)?;

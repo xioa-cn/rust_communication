@@ -1,6 +1,6 @@
 use super::FinsRoute;
 use crate::communication::timeout::Timeout;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{BufReader, ErrorKind, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -79,15 +79,19 @@ pub(super) fn tcp_write(
 }
 
 pub(super) fn tcp_read(
-    stream: &mut TcpStream,
+    stream: &mut BufReader<TcpStream>,
     bytes: &mut [u8],
     deadline: Instant,
 ) -> Result<(), String> {
     let mut received = 0;
     while received < bytes.len() {
-        stream
-            .set_read_timeout(Some(remaining(deadline)?))
-            .map_err(io_error)?;
+        let timeout = remaining(deadline)?;
+        if stream.buffer().is_empty() {
+            stream
+                .get_ref()
+                .set_read_timeout(Some(timeout))
+                .map_err(io_error)?;
+        }
         match stream.read(&mut bytes[received..]) {
             Ok(0) => return Err("Omron.cs TCP peer closed the connection".into()),
             Ok(count) => received += count,
@@ -96,4 +100,41 @@ pub(super) fn tcp_read(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::BufRead;
+    use std::net::{Ipv4Addr, TcpListener};
+
+    #[test]
+    fn buffered_bytes_do_not_bypass_transaction_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.write_all(&[42]).unwrap();
+        let mut reader = BufReader::new(socket);
+        assert_eq!(reader.fill_buf().unwrap(), &[42]);
+        let mut output = [0];
+        assert!(
+            tcp_read(
+                &mut reader,
+                &mut output,
+                Instant::now() - Duration::from_millis(1)
+            )
+            .is_err()
+        );
+        assert_eq!(reader.buffer(), &[42]);
+        tcp_read(
+            &mut reader,
+            &mut output,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(output, [42]);
+    }
 }

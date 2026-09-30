@@ -49,12 +49,17 @@ fn receive(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 fn send(stream: &mut TcpStream, payload: &[u8]) {
+    try_send(stream, payload).unwrap();
+}
+
+fn try_send(stream: &mut TcpStream, payload: &[u8]) -> std::io::Result<()> {
     let mut packet = vec![3, 0];
     packet.extend_from_slice(&((payload.len() + 4) as u16).to_be_bytes());
     packet.extend_from_slice(payload);
     for chunk in packet.chunks(3) {
-        stream.write_all(chunk).unwrap();
+        stream.write_all(chunk)?;
     }
+    Ok(())
 }
 
 fn response(request: &[u8], parameters: &[u8], data: &[u8]) -> Vec<u8> {
@@ -207,6 +212,58 @@ fn reads_and_writes_scalars_bits_and_bytes() {
     assert!(DeviceBase::disconnect(&mut plc).is_success);
     assert!(plc.disconnect().is_success);
     assert!(!plc.is_connected());
+    worker.join().unwrap();
+}
+
+#[test]
+#[ignore = "local loopback throughput measurement"]
+fn loopback_io_benchmark() {
+    let (port, worker) = server(|mut stream| {
+        handshake(&mut stream, 0, 1);
+        for _ in 0..6200 {
+            let request = receive(&mut stream);
+            assert_eq!(request[13], 4);
+            let reply = response(&request, &[4, 1], &[0xff, 4, 0, 32, 0x12, 0x34, 0x56, 0x78]);
+            let mut frame = vec![3, 0];
+            frame.extend_from_slice(&((reply.len() + 4) as u16).to_be_bytes());
+            frame.extend_from_slice(&reply);
+            stream.write_all(&frame).unwrap();
+            let request = receive(&mut stream);
+            assert_eq!(request[13], 5);
+            assert_eq!(&request[request.len() - 2..], &[0x12, 0x34]);
+            let reply = response(&request, &[5, 1], &[0xff]);
+            let mut frame = vec![3, 0];
+            frame.extend_from_slice(&((reply.len() + 4) as u16).to_be_bytes());
+            frame.extend_from_slice(&reply);
+            stream.write_all(&frame).unwrap();
+        }
+    });
+    let mut plc = client(port, Timeout::new(1000, 1000), 0, 1);
+    plc.connect().to_result().unwrap();
+    for round in 0..4 {
+        let iterations = if round == 0 { 200 } else { 2000 };
+        let mut read_time = Duration::ZERO;
+        let mut write_time = Duration::ZERO;
+        for _ in 0..iterations {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                &*plc.read::<u16>("DB1.0", 2).to_result().unwrap(),
+                &[0x1234, 0x5678]
+            );
+            read_time += started.elapsed();
+            let started = std::time::Instant::now();
+            plc.write::<u16>("DB1.0", 0x1234).to_result().unwrap();
+            write_time += started.elapsed();
+        }
+        if round > 0 {
+            println!(
+                "S7 round={round} read_us={:.2} write_us={:.2}",
+                read_time.as_secs_f64() * 1e6 / 2000.0,
+                write_time.as_secs_f64() * 1e6 / 2000.0
+            );
+        }
+    }
+    plc.disconnect().to_result().unwrap();
     worker.join().unwrap();
 }
 
@@ -968,7 +1025,15 @@ fn malformed_responses_invalidate_connection() {
                     return;
                 }
             }
-            send(&mut stream, &packet);
+            if let Err(error) = try_send(&mut stream, &packet) {
+                assert_eq!(fault, 3);
+                assert!(matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                ));
+            }
         });
         let mut plc = client(port, Timeout::default(), 0, 0);
         plc.connect().to_result().unwrap();

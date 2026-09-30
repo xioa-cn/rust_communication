@@ -1,6 +1,7 @@
-use super::modbus_packet::{mbap_length, mbap_request};
+use super::modbus_packet::{MAX_PDU, mbap_length, mbap_request};
 use super::modbus_transport::{
-    NetworkSettings, io_error, tcp_read, tcp_write, validate_network_unit,
+    NetworkSettings, TcpTimeouts, io_error, tcp_read, tcp_read_some, tcp_write,
+    validate_network_unit,
 };
 use super::{ModbusClient, ModbusTransport};
 use crate::communication::timeout::Timeout;
@@ -11,6 +12,7 @@ pub struct TcpTransport {
     settings: NetworkSettings,
     stream: Option<TcpStream>,
     transaction: u16,
+    timeouts: TcpTimeouts,
 }
 
 pub type ModbusTcp = ModbusClient<TcpTransport>;
@@ -22,6 +24,7 @@ impl ModbusClient<TcpTransport> {
                 settings: NetworkSettings::new(address, port, timeout),
                 stream: None,
                 transaction: 0,
+                timeouts: TcpTimeouts::default(),
             },
             1,
         )
@@ -43,11 +46,13 @@ impl ModbusTransport for TcpTransport {
             .set_write_timeout(Some(io_timeout))
             .map_err(io_error)?;
         stream.set_nodelay(true).map_err(io_error)?;
+        self.timeouts = TcpTimeouts::configured(io_timeout);
         self.stream = Some(stream);
         Ok(())
     }
 
     fn disconnect(&mut self) {
+        self.timeouts = TcpTimeouts::default();
         if let Some(stream) = self.stream.take() {
             let _ = stream.shutdown(Shutdown::Both);
         }
@@ -63,13 +68,30 @@ impl ModbusTransport for TcpTransport {
         let stream = self.stream.as_mut().ok_or("Modbus TCP is not connected")?;
         self.transaction = self.transaction.wrapping_add(1);
         let frame = mbap_request(self.transaction, unit, request);
-        tcp_write(stream, &frame, deadline)?;
-        let mut header = [0; 7];
-        tcp_read(stream, &mut header, deadline)?;
-        let length = mbap_length(&header, self.transaction, unit)?;
-        let mut reply = vec![0; length];
-        tcp_read(stream, &mut reply, deadline)?;
-        Ok(reply)
+        tcp_write(stream, &frame, deadline, &mut self.timeouts)?;
+        let mut response = [0; MAX_PDU + 7];
+        let mut received = tcp_read_some(stream, &mut response, deadline, &mut self.timeouts)?;
+        if received < 7 {
+            tcp_read(
+                stream,
+                &mut response[received..7],
+                deadline,
+                &mut self.timeouts,
+            )?;
+            received = 7;
+        }
+        let header = response[..7].try_into().unwrap();
+        let total = 7 + mbap_length(header, self.transaction, unit)?;
+        if received > total {
+            return Err("Unexpected trailing data after Modbus TCP response".into());
+        }
+        tcp_read(
+            stream,
+            &mut response[received..total],
+            deadline,
+            &mut self.timeouts,
+        )?;
+        Ok(response[7..total].to_vec())
     }
 
     fn validate_unit(&self, unit: u8) -> Result<(), String> {

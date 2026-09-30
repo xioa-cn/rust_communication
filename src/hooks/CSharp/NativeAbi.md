@@ -20,6 +20,8 @@ Windows 默认生成 `target/release/rs_appliaction.dll`。将 DLL 放入 C# 程
 
 ## 最小读取示例
 
+2026-09-30 新增的 C# `ReadInto` / `WriteAll` Span 及数组分段重载仍调用既有 `plc_read` / `plc_write`，不新增导出、不修改结构布局，ABI 版本保持 1。它们在同步调用期间保留句柄与缓冲区，业务调用方式见 README 的“C# 缓冲区 API 升级”。
+
 地址和网络参数需要按实际 PLC 配置修改。创建客户端不会连接；只有显式调用 `Connect` 才开始通讯。
 
 ```csharp

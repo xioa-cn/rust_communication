@@ -195,14 +195,16 @@ impl<Transport: ModbusTransport> ModbusClient<Transport> {
         address.validate_length(quantity)?;
         let mut bytes = Vec::with_capacity(values.len() * Value::BYTE_LEN);
         for value in values {
-            let mut encoded = value.to_be_bytes();
-            if encoded.len() != Value::BYTE_LEN || (Value::IS_BIT && encoded[0] > 1) {
+            let offset = bytes.len();
+            value.append_be_bytes(&mut bytes);
+            if bytes.len().checked_sub(offset) != Some(Value::BYTE_LEN)
+                || (Value::IS_BIT && bytes[offset] > 1)
+            {
                 return Err("Modbus value produced an invalid encoding".into());
             }
             if !Value::IS_BIT {
-                self.byte_order.apply(&mut encoded);
+                self.byte_order.apply(&mut bytes[offset..]);
             }
-            bytes.extend_from_slice(&encoded);
         }
         if single && quantity == 1 {
             let (function, value) = if Value::IS_BIT {

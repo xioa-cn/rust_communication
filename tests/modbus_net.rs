@@ -183,6 +183,35 @@ fn tcp_fixed_frame_matches_wire_bytes() {
 }
 
 #[test]
+fn tcp_accepts_fragmented_headers_and_payloads_at_every_boundary() {
+    for split in 1..11 {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_nodelay(true).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 12];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(request.as_slice(), frame(1, &binary("03 00 00 00 01")));
+            let reply = frame(1, &binary("03 02 12 34"));
+            stream.write_all(&reply[..split]).unwrap();
+            thread::sleep(Duration::from_millis(5));
+            stream.write_all(&reply[split..]).unwrap();
+        });
+        let mut client = ModbusTcp::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port, Timeout::default());
+        assert!(client.connect().is_success);
+        assert_eq!(&*client.read::<u16>("0", 1).to_result().unwrap(), &[0x1234]);
+        worker.join().unwrap();
+    }
+}
+
+#[test]
 fn exception_keeps_tcp_connection_usable() {
     let (port, worker) = tcp_script(vec![
         (frame(1, &binary("03 00 00 00 01")), frame(1, &[0x83, 2])),

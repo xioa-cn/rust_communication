@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace RsCommunication
 {
@@ -28,10 +29,177 @@ namespace RsCommunication
         }
     }
 
+    #nullable enable
+    internal sealed class PlcOperationGate
+    {
+        [ThreadStatic] private static Waiter? cachedWaiter;
+        private readonly object sync = new object();
+        private Waiter? head;
+        private Waiter? tail;
+        private int ownerThread;
+        private int depth;
+
+        internal int WaitingCount
+        {
+            get
+            {
+                lock (sync)
+                {
+                    int count = 0;
+                    for (Waiter? waiter = head; waiter != null; waiter = waiter.Next) count++;
+                    return count;
+                }
+            }
+        }
+
+        internal void Enter()
+        {
+            int thread = Environment.CurrentManagedThreadId;
+            Waiter waiter;
+            lock (sync)
+            {
+                if (ownerThread == thread)
+                {
+                    depth++;
+                    return;
+                }
+                if (ownerThread == 0)
+                {
+                    ownerThread = thread;
+                    depth = 1;
+                    return;
+                }
+                waiter = cachedWaiter ?? new Waiter(thread);
+                cachedWaiter = null;
+                waiter.Reset();
+                if (tail == null) head = waiter;
+                else tail.Next = waiter;
+                tail = waiter;
+            }
+            try
+            {
+                waiter.Wait();
+                cachedWaiter = waiter;
+            }
+            catch
+            {
+                Cancel(waiter);
+                throw;
+            }
+        }
+
+        internal void Exit()
+        {
+            Waiter? next = null;
+            bool interrupted = EnterUninterruptibly(sync);
+            try
+            {
+                if (ownerThread != Environment.CurrentManagedThreadId)
+                    throw new SynchronizationLockException("The current thread does not own the PLC operation gate.");
+                if (--depth == 0) next = Advance();
+            }
+            finally { Monitor.Exit(sync); }
+            if (next != null) interrupted |= next.Signal();
+            if (interrupted) throw new ThreadInterruptedException();
+        }
+
+        private static bool EnterUninterruptibly(object target)
+        {
+            bool interrupted = false;
+            while (true)
+            {
+                try
+                {
+                    Monitor.Enter(target);
+                    return interrupted;
+                }
+                catch (ThreadInterruptedException) { interrupted = true; }
+            }
+        }
+
+        private Waiter? Advance()
+        {
+            Waiter? next = head;
+            if (next == null)
+            {
+                ownerThread = 0;
+                depth = 0;
+                return null;
+            }
+            head = next.Next;
+            if (head == null) tail = null;
+            next.Next = null;
+            ownerThread = next.Thread;
+            depth = 1;
+            return next;
+        }
+
+        private void Cancel(Waiter interrupted)
+        {
+            Waiter? next = null;
+            EnterUninterruptibly(sync);
+            try
+            {
+                if (ownerThread == interrupted.Thread)
+                {
+                    next = Advance();
+                }
+                else
+                {
+                    Waiter? previous = null;
+                    for (Waiter? current = head; current != null; current = current.Next)
+                    {
+                        if (ReferenceEquals(current, interrupted))
+                        {
+                            if (previous == null) head = current.Next;
+                            else previous.Next = current.Next;
+                            if (ReferenceEquals(tail, current)) tail = previous;
+                            current.Next = null;
+                            break;
+                        }
+                        previous = current;
+                    }
+                }
+            }
+            finally { Monitor.Exit(sync); }
+            next?.Signal();
+        }
+
+        private sealed class Waiter
+        {
+            internal readonly int Thread;
+            internal Waiter? Next;
+            private bool ready;
+
+            internal Waiter(int thread) { Thread = thread; }
+
+            internal void Reset() { ready = false; }
+
+            internal void Wait()
+            {
+                lock (this)
+                    while (!ready) Monitor.Wait(this);
+            }
+
+            internal bool Signal()
+            {
+                bool interrupted = EnterUninterruptibly(this);
+                try
+                {
+                    ready = true;
+                    Monitor.Pulse(this);
+                }
+                finally { Monitor.Exit(this); }
+                return interrupted;
+            }
+        }
+    }
+    #nullable restore
+
     public abstract class PlcClient : IDisposable
     {
         private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
-        private readonly object gate = new object();
+        private readonly PlcOperationGate gate = new PlcOperationGate();
         private readonly SessionHandle session;
 
         private protected PlcClient(string ip, PlcOptions options)
@@ -61,52 +229,143 @@ namespace RsCommunication
                 : NativeFailure<bool>(status);
         });
 
-        public PlcResult<T> Read<T>(string address) where T : struct
-        {
-            PlcResult<T[]> result = Read<T>(address, 1);
-            return result.IsSuccess
-                ? PlcResult<T>.Success(result.Content[0])
-                : PlcResult<T>.Failure(result.ErrorCode, result.Message);
-        }
+        public PlcResult<T> Read<T>(string address) where T : struct =>
+            UseResult(address, static (handle, state) =>
+            {
+                T value = default;
+                PlcStatus status = ReadValues(handle, state, MemoryMarshal.CreateSpan(ref value, 1));
+                return status == PlcStatus.Ok ? PlcResult<T>.Success(value) : NativeFailure<T>(status);
+            });
 
         public PlcResult<T[]> Read<T>(string address, int count) where T : struct =>
-            UseResult(handle =>
+            UseResult((address, count), static (handle, state) =>
             {
-                var (dataType, width) = TypeInfo<T>();
-                byte[] buffer = new byte[ByteLength(count, width)];
-                PlcStatus status = PlcNative.Read(handle, address, dataType, (uint)count, buffer, out uint written);
-                if (status != PlcStatus.Ok) return NativeFailure<T[]>(status);
-                if (written != buffer.Length) throw new InvalidDataException("PLC returned an unexpected byte count.");
-                if (typeof(T) == typeof(bool))
-                    foreach (byte value in buffer)
-                        if (value > 1) throw new InvalidDataException("PLC returned an invalid Boolean value.");
-                ConvertEndian(buffer, width);
-                T[] values = new T[count];
-                Buffer.BlockCopy(buffer, 0, values, 0, buffer.Length);
-                return PlcResult<T[]>.Success(values);
+                ByteLength(state.count, TypeInfo<T>().Width);
+                T[] values = new T[state.count];
+                PlcStatus status = ReadValues(handle, state.address, values.AsSpan());
+                return status == PlcStatus.Ok ? PlcResult<T[]>.Success(values) : NativeFailure<T[]>(status);
             });
 
-        public PlcResult<T> Write<T>(string address, T value) where T : struct
-        {
-            PlcResult<int> result = WriteAll(address, new[] { value });
-            return result.IsSuccess
-                ? PlcResult<T>.Success(value)
-                : PlcResult<T>.Failure(result.ErrorCode, result.Message);
-        }
-
-        public PlcResult<int> WriteAll<T>(string address, params T[] values) where T : struct =>
-            UseResult(handle =>
+        public PlcResult<int> ReadInto<T>(string address, T[] destination) where T : struct =>
+            UseResult((address, destination), static (handle, state) =>
             {
-                if (values == null) throw new ArgumentNullException(nameof(values));
-                var (dataType, width) = TypeInfo<T>();
-                byte[] buffer = new byte[ByteLength(values.Length, width)];
-                Buffer.BlockCopy(values, 0, buffer, 0, buffer.Length);
-                ConvertEndian(buffer, width);
-                PlcStatus status = PlcNative.Write(handle, address, dataType, (uint)values.Length, buffer);
+                if (state.destination == null) throw new ArgumentNullException(nameof(destination));
+                PlcStatus status = ReadValues(handle, state.address, state.destination.AsSpan());
                 return status == PlcStatus.Ok
-                    ? PlcResult<int>.Success(values.Length)
+                    ? PlcResult<int>.Success(state.destination.Length)
                     : NativeFailure<int>(status);
             });
+
+        public PlcResult<int> ReadInto<T>(string address, T[] destination, int offset, int count) where T : struct =>
+            UseResult((address, destination, offset, count), static (handle, state) =>
+            {
+                if (state.destination == null) throw new ArgumentNullException(nameof(destination));
+                PlcStatus status = ReadValues(handle, state.address, state.destination.AsSpan(state.offset, state.count));
+                return status == PlcStatus.Ok ? PlcResult<int>.Success(state.count) : NativeFailure<int>(status);
+            });
+
+        public PlcResult<int> ReadInto<T>(string address, Span<T> destination) where T : struct =>
+            TransferValues<T>(address, destination, default, false);
+
+        private static PlcStatus ReadValues<T>(ulong handle, string address, Span<T> values) where T : struct
+        {
+            var (dataType, width) = TypeInfo<T>();
+            ByteLength(values.Length, width);
+            Span<byte> buffer = MemoryMarshal.AsBytes(values);
+            PlcStatus status = PlcNative.Read(handle, address, dataType, (uint)values.Length, buffer, out uint written);
+            if (status != PlcStatus.Ok) return status;
+            if (written != buffer.Length) throw new InvalidDataException("PLC returned an unexpected byte count.");
+            if (typeof(T) == typeof(bool))
+                foreach (byte value in buffer)
+                    if (value > 1) throw new InvalidDataException("PLC returned an invalid Boolean value.");
+            ConvertEndian(buffer, width);
+            return PlcStatus.Ok;
+        }
+
+        public PlcResult<T> Write<T>(string address, T value) where T : struct =>
+            UseResult((address, value), static (handle, state) =>
+            {
+                T local = state.value;
+                PlcStatus status = WriteValues<T>(handle, state.address, MemoryMarshal.CreateReadOnlySpan(ref local, 1));
+                return status == PlcStatus.Ok ? PlcResult<T>.Success(state.value) : NativeFailure<T>(status);
+            });
+
+        public PlcResult<int> WriteAll<T>(string address, params T[] values) where T : struct =>
+            UseResult((address, values), static (handle, state) =>
+            {
+                if (state.values == null) throw new ArgumentNullException(nameof(values));
+                PlcStatus status = WriteValues<T>(handle, state.address, state.values.AsSpan());
+                return status == PlcStatus.Ok
+                    ? PlcResult<int>.Success(state.values.Length)
+                    : NativeFailure<int>(status);
+            });
+
+        public PlcResult<int> WriteAll<T>(string address, T[] values, int offset, int count) where T : struct =>
+            UseResult((address, values, offset, count), static (handle, state) =>
+            {
+                if (state.values == null) throw new ArgumentNullException(nameof(values));
+                PlcStatus status = WriteValues<T>(handle, state.address, state.values.AsSpan(state.offset, state.count));
+                return status == PlcStatus.Ok ? PlcResult<int>.Success(state.count) : NativeFailure<int>(status);
+            });
+
+        public PlcResult<int> WriteAll<T>(string address, ReadOnlySpan<T> values) where T : struct =>
+            TransferValues<T>(address, default, values, true);
+
+        private PlcResult<int> TransferValues<T>(string address, Span<T> destination, ReadOnlySpan<T> source, bool write) where T : struct
+        {
+            try
+            {
+                gate.Enter();
+                try
+                {
+                    if (session.IsClosed) throw new ObjectDisposedException(GetType().Name);
+                    bool retained = false;
+                    try
+                    {
+                        session.DangerousAddRef(ref retained);
+                        PlcStatus status = write
+                            ? WriteValues<T>(session.Value, address, source)
+                            : ReadValues<T>(session.Value, address, destination);
+                        return status == PlcStatus.Ok
+                            ? PlcResult<int>.Success(write ? source.Length : destination.Length)
+                            : NativeFailure<int>(status);
+                    }
+                    finally
+                    {
+                        if (retained) session.DangerousRelease();
+                    }
+                }
+                finally { gate.Exit(); }
+            }
+            catch (ObjectDisposedException exception)
+            {
+                return PlcResult<int>.Failure((int)PlcStatus.InvalidHandle, exception.Message);
+            }
+            catch (ArgumentException exception)
+            {
+                return PlcResult<int>.Failure((int)PlcStatus.InvalidArgument, exception.Message);
+            }
+            catch (NotSupportedException exception)
+            {
+                return PlcResult<int>.Failure((int)PlcStatus.NotSupported, exception.Message);
+            }
+            catch (InvalidDataException exception)
+            {
+                return PlcResult<int>.Failure((int)PlcStatus.OperationFailed, exception.Message);
+            }
+        }
+
+        private static PlcStatus WriteValues<T>(ulong handle, string address, ReadOnlySpan<T> values) where T : struct
+        {
+            var (dataType, width) = TypeInfo<T>();
+            ByteLength(values.Length, width);
+            ReadOnlySpan<byte> buffer = MemoryMarshal.AsBytes(values);
+            if (BitConverter.IsLittleEndian || width == 1)
+                return PlcNative.Write(handle, address, dataType, (uint)values.Length, buffer);
+            byte[] converted = buffer.ToArray();
+            ConvertEndian(converted, width);
+            return PlcNative.Write(handle, address, dataType, (uint)values.Length, converted.AsSpan());
+        }
 
         public PlcResult<string> ReadString(string address, int byteLength) =>
             ReadText(address, PlcStringKind.RawUtf8, byteLength);
@@ -142,25 +401,32 @@ namespace RsCommunication
 
         public void Dispose()
         {
-            lock (gate) session.Dispose();
+            gate.Enter();
+            try { session.Dispose(); }
+            finally { gate.Exit(); }
         }
 
-        private TResult Use<TResult>(Func<ulong, TResult> action)
+        private TResult Use<TResult>(Func<ulong, TResult> action) =>
+            Use(action, static (handle, operation) => operation(handle));
+
+        private TResult Use<TState, TResult>(TState state, Func<ulong, TState, TResult> action)
         {
-            lock (gate)
+            gate.Enter();
+            try
             {
                 if (session.IsClosed) throw new ObjectDisposedException(GetType().Name);
                 bool retained = false;
                 try
                 {
                     session.DangerousAddRef(ref retained);
-                    return action(session.Value);
+                    return action(session.Value, state);
                 }
                 finally
                 {
                     if (retained) session.DangerousRelease();
                 }
             }
+            finally { gate.Exit(); }
         }
 
         private PlcResult Execute(Func<ulong, PlcStatus> operation) => UseResult(handle =>
@@ -169,9 +435,12 @@ namespace RsCommunication
             return status == PlcStatus.Ok ? PlcResult<bool>.Success(true) : NativeFailure<bool>(status);
         });
 
-        private PlcResult<T> UseResult<T>(Func<ulong, PlcResult<T>> operation)
+        private PlcResult<T> UseResult<T>(Func<ulong, PlcResult<T>> operation) =>
+            UseResult(operation, static (handle, action) => action(handle));
+
+        private PlcResult<T> UseResult<TState, T>(TState state, Func<ulong, TState, PlcResult<T>> operation)
         {
-            try { return Use(operation); }
+            try { return Use(state, operation); }
             catch (ObjectDisposedException exception)
             {
                 return PlcResult<T>.Failure((int)PlcStatus.InvalidHandle, exception.Message);
@@ -203,11 +472,11 @@ namespace RsCommunication
             return count * width;
         }
 
-        private static void ConvertEndian(byte[] buffer, int width)
+        private static void ConvertEndian(Span<byte> buffer, int width)
         {
             if (BitConverter.IsLittleEndian || width == 1) return;
             for (int offset = 0; offset < buffer.Length; offset += width)
-                Array.Reverse(buffer, offset, width);
+                buffer.Slice(offset, width).Reverse();
         }
 
         private static (PlcDataType DataType, int Width) TypeInfo<T>() where T : struct

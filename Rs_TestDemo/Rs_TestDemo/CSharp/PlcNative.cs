@@ -7,24 +7,53 @@ namespace RsCommunication
 {
     internal enum PlcProtocol : uint
     {
-        S7 = 1, McBinaryTcp = 2, McAsciiTcp = 3, McBinaryUdp = 4, McAsciiUdp = 5,
-        A1eBinaryTcp = 6, A1eAsciiTcp = 7, McRBinaryTcp = 8,
-        FinsTcp = 9, FinsUdp = 10, ModbusTcp = 11, ModbusUdp = 12,
-        ModbusRtu = 13, ModbusAscii = 14, InovanceModbusTcp = 15
+        S7 = 1,
+        McBinaryTcp = 2,
+        McAsciiTcp = 3,
+        McBinaryUdp = 4,
+        McAsciiUdp = 5,
+        A1eBinaryTcp = 6,
+        A1eAsciiTcp = 7,
+        McRBinaryTcp = 8,
+        FinsTcp = 9,
+        FinsUdp = 10,
+        ModbusTcp = 11,
+        ModbusUdp = 12,
+        ModbusRtu = 13,
+        ModbusAscii = 14,
+        InovanceModbusTcp = 15
     }
 
     internal enum PlcDataType : uint
     {
-        Bool = 1, UInt8 = 2, Int8 = 3, UInt16 = 4, Int16 = 5, UInt32 = 6,
-        Int32 = 7, UInt64 = 8, Int64 = 9, Float32 = 10, Float64 = 11
+        Bool = 1,
+        UInt8 = 2,
+        Int8 = 3,
+        UInt16 = 4,
+        Int16 = 5,
+        UInt32 = 6,
+        Int32 = 7,
+        UInt64 = 8,
+        Int64 = 9,
+        Float32 = 10,
+        Float64 = 11
     }
 
-    internal enum PlcStringKind : uint { RawUtf8 = 0, S7String = 1 }
+    internal enum PlcStringKind : uint
+    {
+        RawUtf8 = 0,
+        S7String = 1
+    }
 
     internal enum PlcStatus : int
     {
-        Ok = 0, InvalidArgument = -1, InvalidHandle = -2, BufferTooSmall = -3,
-        NotSupported = -4, OperationFailed = -5, InternalError = -6
+        Ok = 0,
+        InvalidArgument = -1,
+        InvalidHandle = -2,
+        BufferTooSmall = -3,
+        NotSupported = -4,
+        OperationFailed = -5,
+        InternalError = -6
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -61,8 +90,10 @@ namespace RsCommunication
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int PlcSerialRead(UIntPtr context, IntPtr buffer, uint capacity);
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int PlcSerialWrite(UIntPtr context, IntPtr buffer, uint length);
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int PlcSerialFlush(UIntPtr context);
 
@@ -80,48 +111,72 @@ namespace RsCommunication
         public const string Library = "rs_appliaction";
         public const uint MaxBufferBytes = 1_048_576;
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_abi_version")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_abi_version")]
         public static extern uint AbiVersion();
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_default_options")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_default_options")]
         private static extern PlcStatus DefaultOptions(PlcProtocol protocol, out PlcOptions options, uint size);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_create")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_create")]
         private static extern PlcStatus CreateNative(ref PlcOptions options,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string host, out ulong handle);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_create_serial")]
-        public static extern PlcStatus CreateSerial(ref PlcOptions options, ref PlcSerialCallbacks callbacks, out ulong handle);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_create_serial")]
+        public static extern PlcStatus CreateSerial(ref PlcOptions options, ref PlcSerialCallbacks callbacks,
+            out ulong handle);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_connect")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_connect")]
         public static extern PlcStatus Connect(ulong handle);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_disconnect")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_disconnect")]
         public static extern PlcStatus Disconnect(ulong handle);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_is_connected")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_is_connected")]
         public static extern PlcStatus IsConnected(ulong handle, out byte connected);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_destroy")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_destroy")]
         public static extern PlcStatus Destroy(ulong handle);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read")]
         private static extern PlcStatus ReadNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
             PlcDataType dataType, uint count, [Out] byte[] buffer, uint capacity, out uint written);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read")]
+        private static extern PlcStatus ReadBufferNative(ulong handle,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+            PlcDataType dataType, uint count, ref byte buffer, uint capacity, out uint written);
+
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_write")]
         private static extern PlcStatus WriteNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
             PlcDataType dataType, uint count, [In] byte[] buffer, uint length);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read_string")]
-        private static extern PlcStatus ReadStringNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write")]
+        private static extern PlcStatus WriteBufferNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+            PlcDataType dataType, uint count, ref byte buffer, uint length);
+
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_read_string")]
+        private static extern PlcStatus ReadStringNative(ulong handle,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
             PlcStringKind kind, uint byteLength, [Out] byte[] buffer, uint capacity, out uint written);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write_string")]
-        private static extern PlcStatus WriteStringNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_write_string")]
+        private static extern PlcStatus WriteStringNative(ulong handle,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
             PlcStringKind kind, [In] byte[] buffer, uint byteLength);
 
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_last_error")]
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
+            EntryPoint = "plc_last_error")]
         private static extern uint LastError([Out] byte[] buffer, uint capacity);
 
         private static string ValidateText(string value)
@@ -147,7 +202,8 @@ namespace RsCommunication
         public static PlcStatus Read(ulong handle, string address, PlcDataType dataType,
             uint count, byte[] buffer, out uint written)
         {
-            return ReadNative(handle, ValidateText(address), dataType, count, buffer, BufferLength(buffer), out written);
+            return ReadNative(handle, ValidateText(address), dataType, count, buffer, BufferLength(buffer),
+                out written);
         }
 
         public static PlcStatus Write(ulong handle, string address, PlcDataType dataType, uint count, byte[] buffer)
@@ -155,10 +211,28 @@ namespace RsCommunication
             return WriteNative(handle, ValidateText(address), dataType, count, buffer, BufferLength(buffer));
         }
 
+        public static PlcStatus Write(ulong handle, string address, PlcDataType dataType, uint count, ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.IsEmpty || buffer.Length > MaxBufferBytes)
+                throw new ArgumentException("The buffer must contain 1..1048576 bytes.", nameof(buffer));
+            return WriteBufferNative(handle, ValidateText(address), dataType, count,
+                ref MemoryMarshal.GetReference(buffer), (uint)buffer.Length);
+        }
+
+        public static PlcStatus Read(ulong handle, string address, PlcDataType dataType,
+            uint count, Span<byte> buffer, out uint written)
+        {
+            if (buffer.IsEmpty || buffer.Length > MaxBufferBytes)
+                throw new ArgumentException("The buffer must contain 1..1048576 bytes.", nameof(buffer));
+            return ReadBufferNative(handle, ValidateText(address), dataType, count,
+                ref MemoryMarshal.GetReference(buffer), (uint)buffer.Length, out written);
+        }
+
         public static PlcStatus ReadString(ulong handle, string address, PlcStringKind kind,
             uint byteLength, byte[] buffer, out uint written)
         {
-            return ReadStringNative(handle, ValidateText(address), kind, byteLength, buffer, BufferLength(buffer), out written);
+            return ReadStringNative(handle, ValidateText(address), kind, byteLength, buffer, BufferLength(buffer),
+                out written);
         }
 
         public static PlcStatus WriteString(ulong handle, string address, PlcStringKind kind, byte[] buffer)
@@ -212,8 +286,14 @@ namespace RsCommunication
                 Marshal.Copy(bytes, 0, buffer, actual);
                 return actual;
             }
-            catch (TimeoutException) { return -2; }
-            catch (Exception) { return -1; }
+            catch (TimeoutException)
+            {
+                return -2;
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
         }
 
         private int Write(UIntPtr context, IntPtr buffer, uint length)
@@ -225,15 +305,31 @@ namespace RsCommunication
                 stream.Write(bytes, 0, bytes.Length);
                 return bytes.Length;
             }
-            catch (TimeoutException) { return -2; }
-            catch (Exception) { return -1; }
+            catch (TimeoutException)
+            {
+                return -2;
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
         }
 
         private int Flush(UIntPtr context)
         {
-            try { stream.Flush(); return 0; }
-            catch (TimeoutException) { return -2; }
-            catch (Exception) { return -1; }
+            try
+            {
+                stream.Flush();
+                return 0;
+            }
+            catch (TimeoutException)
+            {
+                return -2;
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
         }
     }
 }

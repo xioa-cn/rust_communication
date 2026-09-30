@@ -166,6 +166,59 @@ fn tcp_negotiates_nodes_and_handles_fragmented_frames_with_shared_api() {
 }
 
 #[test]
+#[ignore = "local loopback throughput measurement"]
+fn loopback_io_benchmark() {
+    let (port, worker) = tcp_server(|mut stream| {
+        handshake(&mut stream, 0, 20);
+        for _ in 0..6200 {
+            let (command, request) = read_frame(&mut stream);
+            assert_eq!(command, 2);
+            assert_eq!(&request[10..12], &[1, 1]);
+            stream
+                .write_all(&tcp_frame(
+                    2,
+                    &response(&request, &[0x12, 0x34, 0x56, 0x78]),
+                ))
+                .unwrap();
+            let (command, request) = read_frame(&mut stream);
+            assert_eq!(command, 2);
+            assert_eq!(&request[10..12], &[1, 2]);
+            assert_eq!(&request[18..], &[0x12, 0x34]);
+            stream
+                .write_all(&tcp_frame(2, &response(&request, &[])))
+                .unwrap();
+        }
+    });
+    let mut plc = tcp_client(port);
+    plc.connect().to_result().unwrap();
+    for round in 0..4 {
+        let iterations = if round == 0 { 200 } else { 2000 };
+        let mut read_time = Duration::ZERO;
+        let mut write_time = Duration::ZERO;
+        for _ in 0..iterations {
+            let started = Instant::now();
+            assert_eq!(
+                &*plc.read::<u16>("D100", 2).to_result().unwrap(),
+                &[0x1234, 0x5678]
+            );
+            read_time += started.elapsed();
+            let started = Instant::now();
+            plc.write::<u16>("D100", 0x1234).to_result().unwrap();
+            write_time += started.elapsed();
+        }
+        if round > 0 {
+            println!(
+                "FINS round={round} read_us={:.2} write_us={:.2}",
+                read_time.as_secs_f64() * 1e6 / 2000.0,
+                write_time.as_secs_f64() * 1e6 / 2000.0
+            );
+        }
+    }
+    plc.disconnect().to_result().unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
 fn udp_sends_bare_fins_frames_with_the_same_api() {
     let (port, worker) = udp_server(|socket| {
         let mut buffer = [0; 2048];

@@ -1,5 +1,6 @@
 //! S7 会话管理与读写流程；协议细节由 address、packet、transport、value 模块承担。
 
+use std::io::BufReader;
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -24,7 +25,7 @@ pub struct S7Net {
     slot: usize,
     /// 显式 TSAP 优先于型号默认值，适用于以太网模块和自定义连接组态。
     tsap: Option<(u16, u16)>,
-    stream: Option<TcpStream>,
+    stream: Option<BufReader<TcpStream>>,
     /// 不包含 TPKT/COTP 头部的协商后 PDU 长度。
     pdu_length: usize,
     /// 请求与响应配对的序列号；由可变借用保证串行递增。
@@ -174,6 +175,7 @@ impl S7Net {
             &mut stream,
             &packet::connection_request(local_tsap, remote_tsap),
         )?;
+        let mut stream = BufReader::with_capacity(REQUESTED_PDU + 7, stream);
         packet::validate_connection_confirm(&receive_tpkt(&mut stream, 260)?)?;
 
         self.pdu_length = REQUESTED_PDU;
@@ -314,11 +316,11 @@ impl S7Net {
         // 先编码并检查所有元素，再开始发送，避免编码失败造成不必要的部分写入。
         let mut bytes = Vec::with_capacity(byte_length);
         for value in array {
-            let encoded = value.to_be_bytes();
-            if encoded.len() != T::BYTE_LEN {
+            let offset = bytes.len();
+            value.append_be_bytes(&mut bytes);
+            if bytes.len().checked_sub(offset) != Some(T::BYTE_LEN) {
                 return Err("Encoded value byte length does not match element width".into());
             }
-            bytes.extend_from_slice(&encoded);
         }
         self.write_bytes(&address, 0, &bytes, T::IS_BIT)?;
         Ok(array.len())
@@ -386,7 +388,7 @@ impl S7Net {
         let request = packet::job(self.sequence, parameters, data);
         let result = (|| {
             let stream = self.stream.as_mut().ok_or("S7 is not connected")?;
-            send_tpkt(stream, &request)?;
+            send_tpkt(stream.get_mut(), &request)?;
             let response = receive_data(stream, self.pdu_length)?;
             Response::parse(&response, self.sequence)
         })();
@@ -414,7 +416,7 @@ impl S7Net {
     /// 先移除本地连接，再尝试关闭双向传输；关闭失败也不复用旧 Socket。
     fn close_socket(&mut self) {
         if let Some(stream) = self.stream.take() {
-            let _ = stream.shutdown(Shutdown::Both);
+            let _ = stream.get_ref().shutdown(Shutdown::Both);
         }
     }
 }

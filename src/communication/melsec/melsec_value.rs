@@ -10,6 +10,9 @@ pub trait MelsecValue: Sized {
     fn from_le_bytes(bytes: &[u8]) -> Result<Self, String>;
     /// 编码为低字节、低字在前的连续字节流。
     fn to_le_bytes(&self) -> Vec<u8>;
+    fn append_le_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.to_le_bytes());
+    }
 }
 
 /// 读取能力；String 使用调用方指定的原始字节长度。
@@ -95,6 +98,9 @@ macro_rules! numeric_value {
     fn to_le_bytes(&self) -> Vec<u8> {
                 <$value_type>::to_le_bytes(*self).to_vec()
             }
+            fn append_le_bytes(&self, destination: &mut Vec<u8>) {
+                destination.extend_from_slice(&<$value_type>::to_le_bytes(*self));
+            }
         })+
     };
 }
@@ -115,6 +121,9 @@ impl MelsecValue for bool {
     /// 编码为低字节、低字在前的连续字节流。
     fn to_le_bytes(&self) -> Vec<u8> {
         vec![u8::from(*self)]
+    }
+    fn append_le_bytes(&self, destination: &mut Vec<u8>) {
+        destination.push(u8::from(*self));
     }
 }
 

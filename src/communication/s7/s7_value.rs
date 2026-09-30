@@ -11,6 +11,9 @@ pub trait S7Value: Sized {
     fn from_be_bytes(bytes: &[u8]) -> Result<Self, String>;
     /// 将一个元素编码为大端有效载荷。
     fn to_be_bytes(&self) -> Vec<u8>;
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.to_be_bytes());
+    }
 }
 
 /// 可读取的 S7 元素。String 将指定长度的原始字节解码为一个字符串。
@@ -93,6 +96,9 @@ macro_rules! numeric_value {
             fn to_be_bytes(&self) -> Vec<u8> {
                 <$value_type>::to_be_bytes(*self).to_vec()
             }
+            fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+                destination.extend_from_slice(&<$value_type>::to_be_bytes(*self));
+            }
         })+
     };
 }
@@ -114,5 +120,8 @@ impl S7Value for bool {
 
     fn to_be_bytes(&self) -> Vec<u8> {
         vec![u8::from(*self)]
+    }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.push(u8::from(*self));
     }
 }

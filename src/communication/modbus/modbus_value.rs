@@ -33,6 +33,9 @@ pub trait ModbusValue: Sized {
     const IS_STRING: bool = false;
     fn from_be_bytes(bytes: &[u8]) -> Result<Self, String>;
     fn to_be_bytes(&self) -> Vec<u8>;
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.to_be_bytes());
+    }
 }
 
 fn fixed_bytes<const SIZE: usize>(bytes: &[u8]) -> Result<[u8; SIZE], String> {
@@ -68,6 +71,9 @@ impl ModbusValue for bool {
     fn to_be_bytes(&self) -> Vec<u8> {
         Vec::from([u8::from(*self)])
     }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.push(u8::from(*self));
+    }
 }
 
 impl ModbusValue for u16 {
@@ -77,6 +83,9 @@ impl ModbusValue for u16 {
     }
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
+    }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
     }
 }
 
@@ -88,6 +97,9 @@ impl ModbusValue for i16 {
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
     }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
+    }
 }
 
 impl ModbusValue for u32 {
@@ -97,6 +109,9 @@ impl ModbusValue for u32 {
     }
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
+    }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
     }
 }
 
@@ -108,6 +123,9 @@ impl ModbusValue for i32 {
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
     }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
+    }
 }
 
 impl ModbusValue for u64 {
@@ -117,6 +135,9 @@ impl ModbusValue for u64 {
     }
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
+    }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
     }
 }
 
@@ -128,6 +149,9 @@ impl ModbusValue for i64 {
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
     }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
+    }
 }
 
 impl ModbusValue for f32 {
@@ -138,6 +162,9 @@ impl ModbusValue for f32 {
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
     }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
+    }
 }
 
 impl ModbusValue for f64 {
@@ -147,5 +174,8 @@ impl ModbusValue for f64 {
     }
     fn to_be_bytes(&self) -> Vec<u8> {
         Self::to_be_bytes(*self).to_vec()
+    }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&Self::to_be_bytes(*self));
     }
 }

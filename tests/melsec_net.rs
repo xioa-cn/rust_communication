@@ -10,6 +10,43 @@ use std::time::Duration;
 /// 一步表示客户端应发送的完整报文及模拟 PLC 的完整回复。
 type Step = (Vec<u8>, Vec<u8>);
 
+#[test]
+#[ignore = "local loopback throughput measurement"]
+fn loopback_io_benchmark() {
+    let steps = standard_steps(false);
+    let script = (0..6200)
+        .flat_map(|_| [steps[0].clone(), steps[1].clone()])
+        .collect();
+    let (port, worker) = tcp_script_chunks(script, 65535);
+    let mut plc = MelsecMcNet::new(Ipv4Addr::LOCALHOST.into(), port, Timeout::new(1000, 1000));
+    plc.connect().to_result().unwrap();
+    for round in 0..4 {
+        let iterations = if round == 0 { 200 } else { 2000 };
+        let mut read_time = Duration::ZERO;
+        let mut write_time = Duration::ZERO;
+        for _ in 0..iterations {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                &*plc.read::<u32>("D100", 2).to_result().unwrap(),
+                &[0x12345678, 0x90abcdef]
+            );
+            read_time += started.elapsed();
+            let started = std::time::Instant::now();
+            plc.write::<u16>("D100", 0x1234).to_result().unwrap();
+            write_time += started.elapsed();
+        }
+        if round > 0 {
+            println!(
+                "MC round={round} read_us={:.2} write_us={:.2}",
+                read_time.as_secs_f64() * 1e6 / 2000.0,
+                write_time.as_secs_f64() * 1e6 / 2000.0
+            );
+        }
+    }
+    plc.disconnect().to_result().unwrap();
+    worker.join().unwrap();
+}
+
 /// 以十六进制文字给出独立报文向量，避免测试依赖被测编码器。
 fn binary(text: &str) -> Vec<u8> {
     text.split_whitespace()
@@ -19,6 +56,10 @@ fn binary(text: &str) -> Vec<u8> {
 
 /// 创建 TCP 模拟设备；故意分段回复以覆盖流式拆包。
 fn tcp_script(steps: Vec<Step>) -> (u16, JoinHandle<()>) {
+    tcp_script_chunks(steps, 3)
+}
+
+fn tcp_script_chunks(steps: Vec<Step>, chunk_size: usize) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let worker = thread::spawn(move || {
@@ -34,7 +75,7 @@ fn tcp_script(steps: Vec<Step>) -> (u16, JoinHandle<()>) {
             let mut request = vec![0; expected.len()];
             stream.read_exact(&mut request).unwrap();
             assert_eq!(request, expected);
-            for chunk in reply.chunks(3) {
+            for chunk in reply.chunks(chunk_size) {
                 stream.write_all(chunk).unwrap();
             }
         }

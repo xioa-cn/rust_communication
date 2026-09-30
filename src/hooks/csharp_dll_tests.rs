@@ -40,6 +40,41 @@ fn options_layout_and_network_protocols_are_available_without_connecting() {
 }
 
 #[test]
+fn abi_encoding_writes_exact_little_endian_values_into_unaligned_output() {
+    fn verify<Value: AbiValue>(value: Value, expected: &[u8]) {
+        let mut storage = vec![MaybeUninit::new(0xa5); Value::SIZE + 2];
+        value.encode(&mut storage[1..=Value::SIZE]);
+        let actual: Vec<u8> = storage
+            .into_iter()
+            .map(|byte| unsafe { byte.assume_init() })
+            .collect();
+        assert_eq!(actual[0], 0xa5);
+        assert_eq!(&actual[1..=Value::SIZE], expected);
+        assert_eq!(actual[Value::SIZE + 1], 0xa5);
+    }
+    verify(false, &[0]);
+    verify(true, &[1]);
+    verify(0xab_u8, &[0xab]);
+    verify(-2_i8, &[0xfe]);
+    verify(0x1234_u16, &[0x34, 0x12]);
+    verify(-2_i16, &[0xfe, 0xff]);
+    verify(0x12345678_u32, &[0x78, 0x56, 0x34, 0x12]);
+    verify(-2_i32, &[0xfe, 0xff, 0xff, 0xff]);
+    verify(
+        0x0123456789abcdef_u64,
+        &[0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01],
+    );
+    verify(-2_i64, &[0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    verify(1.0_f32, &[0, 0, 0x80, 0x3f]);
+    verify(1.0_f64, &[0, 0, 0, 0, 0, 0, 0xf0, 0x3f]);
+    verify(f32::from_bits(0x7fc01234), &[0x34, 0x12, 0xc0, 0x7f]);
+    verify(
+        f64::from_bits(0x8000000000000000),
+        &[0, 0, 0, 0, 0, 0, 0, 0x80],
+    );
+}
+
+#[test]
 fn all_cpu_models_are_constructible() {
     for s7_type in 0..=5 {
         let mut options = PlcOptions::for_protocol(1).unwrap();
@@ -254,8 +289,12 @@ fn numeric_payloads_are_little_endian_and_preserve_precision() {
     macro_rules! roundtrip {
         ($value:expr) => {{
             let value = $value;
-            let mut bytes = Vec::new();
-            AbiValue::encode(&value, &mut bytes);
+            let mut encoded = vec![MaybeUninit::new(0xa5); std::mem::size_of_val(&value)];
+            AbiValue::encode(&value, &mut encoded);
+            let bytes: Vec<u8> = encoded
+                .into_iter()
+                .map(|byte| unsafe { byte.assume_init() })
+                .collect();
             assert_eq!(bytes, value.to_le_bytes());
             let decoded = <_ as AbiValue>::decode(&bytes).unwrap();
             assert_eq!(value, decoded);

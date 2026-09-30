@@ -25,7 +25,7 @@ use std::{
     collections::HashMap,
     ffi::{CStr, c_char},
     io::{self, Read, Write},
-    mem::size_of,
+    mem::{MaybeUninit, size_of},
     net::IpAddr,
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
@@ -516,7 +516,7 @@ fn network_device(options: PlcOptions, address: IpAddr) -> FfiResult<Device> {
 trait AbiValue: Sized {
     const SIZE: usize;
     fn decode(bytes: &[u8]) -> FfiResult<Self>;
-    fn encode(&self, output: &mut Vec<u8>);
+    fn encode(&self, output: &mut [MaybeUninit<u8>]);
     fn read(device: &mut Device, address: &str, count: usize) -> FfiResult<Box<[Self]>>;
     fn write(device: &mut Device, address: &str, values: &[Self]) -> FfiResult<()>;
 }
@@ -532,8 +532,10 @@ macro_rules! abi_number {
                         .map_err(|_| invalid("Invalid numeric byte length"))?,
                 ))
             }
-            fn encode(&self, output: &mut Vec<u8>) {
-                output.extend_from_slice(&self.to_le_bytes());
+            fn encode(&self, output: &mut [MaybeUninit<u8>]) {
+                for (destination, byte) in output.iter_mut().zip(self.to_le_bytes()) {
+                    destination.write(byte);
+                }
             }
             fn read(device: &mut Device, address: &str, count: usize) -> FfiResult<Box<[Self]>> {
                 operation($dispatch!(
@@ -582,8 +584,8 @@ impl AbiValue for bool {
             _ => Err(invalid("Bool payload must contain only 0 or 1")),
         }
     }
-    fn encode(&self, output: &mut Vec<u8>) {
-        output.push(u8::from(*self));
+    fn encode(&self, output: &mut [MaybeUninit<u8>]) {
+        output[0].write(u8::from(*self));
     }
     fn read(device: &mut Device, address: &str, count: usize) -> FfiResult<Box<[Self]>> {
         operation(dispatch!(
@@ -623,20 +625,20 @@ fn data_length(data_type: u32, count: u32) -> FfiResult<u32> {
 fn read_values<Value: AbiValue>(
     device: &mut Device,
     address: &str,
-    count: u32,
-) -> FfiResult<Vec<u8>> {
-    let values = Value::read(device, address, count as usize)?;
-    if values.len() != count as usize {
+    output: &mut [MaybeUninit<u8>],
+) -> FfiResult<()> {
+    let count = output.len() / Value::SIZE;
+    let values = Value::read(device, address, count)?;
+    if values.len() != count {
         return Err(FfiError(
             PLC_INTERNAL_ERROR,
             "Protocol returned an unexpected element count".into(),
         ));
     }
-    let mut output = Vec::with_capacity(count as usize * Value::SIZE);
-    for value in values.iter() {
-        value.encode(&mut output);
+    for (value, destination) in values.iter().zip(output.chunks_exact_mut(Value::SIZE)) {
+        value.encode(destination);
     }
-    Ok(output)
+    Ok(())
 }
 
 fn write_values<Value: AbiValue>(
@@ -644,6 +646,10 @@ fn write_values<Value: AbiValue>(
     address: &str,
     bytes: &[u8],
 ) -> FfiResult<()> {
+    if bytes.len() == Value::SIZE {
+        let value = Value::decode(bytes)?;
+        return Value::write(device, address, std::slice::from_ref(&value));
+    }
     let values = bytes
         .chunks_exact(Value::SIZE)
         .map(Value::decode)
@@ -856,12 +862,14 @@ pub unsafe extern "C" fn plc_read(
         let required = data_length(data_type, count)?;
         let address = unsafe { text(address)? };
         unsafe { prepare_output(output, capacity, written, required)? };
-        let bytes = with_device(handle, |device| {
-            data_dispatch!(data_type, read_values, device, address, count)
+        let destination = unsafe {
+            std::slice::from_raw_parts_mut(output.cast::<MaybeUninit<u8>>(), required as usize)
+        };
+        with_device(handle, |device| {
+            data_dispatch!(data_type, read_values, device, address, destination)
         })?;
         unsafe {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
-            ptr::write_unaligned(written, bytes.len() as u32);
+            ptr::write_unaligned(written, required);
         }
         Ok(())
     })

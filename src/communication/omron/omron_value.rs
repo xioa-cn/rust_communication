@@ -38,6 +38,9 @@ pub trait OmronValue: Sized {
     const IS_BIT: bool = false;
     fn from_be_bytes(bytes: &[u8]) -> Result<Self, String>;
     fn to_be_bytes(&self) -> Vec<u8>;
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.extend_from_slice(&self.to_be_bytes());
+    }
 }
 
 pub trait OmronReadValue: Sized {
@@ -101,6 +104,9 @@ macro_rules! numeric_value {
                 Ok(<$value_type>::from_be_bytes(bytes))
             }
             fn to_be_bytes(&self) -> Vec<u8> { <$value_type>::to_be_bytes(*self).to_vec() }
+            fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+                destination.extend_from_slice(&<$value_type>::to_be_bytes(*self));
+            }
         })+
     };
 }
@@ -119,6 +125,9 @@ impl OmronValue for bool {
     }
     fn to_be_bytes(&self) -> Vec<u8> {
         vec![u8::from(*self)]
+    }
+    fn append_be_bytes(&self, destination: &mut Vec<u8>) {
+        destination.push(u8::from(*self));
     }
 }
 

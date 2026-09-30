@@ -2,12 +2,13 @@ use super::omron_packet::{MAX_FRAME, tcp_frame};
 use super::omron_transport::{NetworkSettings, io_error, tcp_read, tcp_write};
 use super::{FinsRoute, FinsTransport, OmronClient};
 use crate::communication::timeout::Timeout;
+use std::io::BufReader;
 use std::net::{IpAddr, Shutdown, TcpStream};
 use std::time::Instant;
 
 pub struct TcpTransport {
     settings: NetworkSettings,
-    stream: Option<TcpStream>,
+    stream: Option<BufReader<TcpStream>>,
     active_route: Option<FinsRoute>,
 }
 
@@ -39,6 +40,7 @@ impl FinsTransport for TcpTransport {
             &tcp_frame(0, &u32::from(route.source_node).to_be_bytes()),
             deadline,
         )?;
+        let mut stream = BufReader::with_capacity(MAX_FRAME + 16, stream);
         let reply = read_frame(&mut stream, 1, deadline)?;
         if reply.len() != 8 {
             return Err("FINS/TCP node negotiation length must be 8 bytes".into());
@@ -69,7 +71,7 @@ impl FinsTransport for TcpTransport {
     fn disconnect(&mut self) {
         self.active_route = None;
         if let Some(stream) = self.stream.take() {
-            let _ = stream.shutdown(Shutdown::Both);
+            let _ = stream.get_ref().shutdown(Shutdown::Both);
         }
     }
 
@@ -86,13 +88,13 @@ impl FinsTransport for TcpTransport {
             .stream
             .as_mut()
             .ok_or("Omron.cs FINS TCP is not connected")?;
-        tcp_write(stream, &tcp_frame(2, request), deadline)?;
+        tcp_write(stream.get_mut(), &tcp_frame(2, request), deadline)?;
         read_frame(stream, 2, deadline)
     }
 }
 
 fn read_frame(
-    stream: &mut TcpStream,
+    stream: &mut BufReader<TcpStream>,
     expected_command: u32,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {

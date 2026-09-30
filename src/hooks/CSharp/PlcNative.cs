@@ -109,9 +109,17 @@ namespace RsCommunication
         private static extern PlcStatus ReadNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
             PlcDataType dataType, uint count, [Out] byte[] buffer, uint capacity, out uint written);
 
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read")]
+        private static extern PlcStatus ReadBufferNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+            PlcDataType dataType, uint count, ref byte buffer, uint capacity, out uint written);
+
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write")]
         private static extern PlcStatus WriteNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
             PlcDataType dataType, uint count, [In] byte[] buffer, uint length);
+
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write")]
+        private static extern PlcStatus WriteBufferNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+            PlcDataType dataType, uint count, ref byte buffer, uint length);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read_string")]
         private static extern PlcStatus ReadStringNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
@@ -153,6 +161,23 @@ namespace RsCommunication
         public static PlcStatus Write(ulong handle, string address, PlcDataType dataType, uint count, byte[] buffer)
         {
             return WriteNative(handle, ValidateText(address), dataType, count, buffer, BufferLength(buffer));
+        }
+
+        public static PlcStatus Write(ulong handle, string address, PlcDataType dataType, uint count, ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.IsEmpty || buffer.Length > MaxBufferBytes)
+                throw new ArgumentException("The buffer must contain 1..1048576 bytes.", nameof(buffer));
+            return WriteBufferNative(handle, ValidateText(address), dataType, count,
+                ref MemoryMarshal.GetReference(buffer), (uint)buffer.Length);
+        }
+
+        public static PlcStatus Read(ulong handle, string address, PlcDataType dataType,
+            uint count, Span<byte> buffer, out uint written)
+        {
+            if (buffer.IsEmpty || buffer.Length > MaxBufferBytes)
+                throw new ArgumentException("The buffer must contain 1..1048576 bytes.", nameof(buffer));
+            return ReadBufferNative(handle, ValidateText(address), dataType, count,
+                ref MemoryMarshal.GetReference(buffer), (uint)buffer.Length, out written);
         }
 
         public static PlcStatus ReadString(ulong handle, string address, PlcStringKind kind,
