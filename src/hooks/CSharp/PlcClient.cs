@@ -1,3 +1,21 @@
+#if NETFRAMEWORK
+#define PLC_PINNED_BUFFERS
+#elif NETSTANDARD
+#if NETSTANDARD2_1 || NETSTANDARD2_1_OR_GREATER
+#define PLC_SPAN_BUFFERS
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+#elif NETCOREAPP
+#if NETCOREAPP3_0 || NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER
+#define PLC_SPAN_BUFFERS
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -29,13 +47,12 @@ namespace RsCommunication
         }
     }
 
-    #nullable enable
     internal sealed class PlcOperationGate
     {
-        [ThreadStatic] private static Waiter? cachedWaiter;
+        [ThreadStatic] private static Waiter cachedWaiter;
         private readonly object sync = new object();
-        private Waiter? head;
-        private Waiter? tail;
+        private Waiter head;
+        private Waiter tail;
         private int ownerThread;
         private int depth;
 
@@ -46,7 +63,7 @@ namespace RsCommunication
                 lock (sync)
                 {
                     int count = 0;
-                    for (Waiter? waiter = head; waiter != null; waiter = waiter.Next) count++;
+                    for (Waiter waiter = head; waiter != null; waiter = waiter.Next) count++;
                     return count;
                 }
             }
@@ -90,7 +107,7 @@ namespace RsCommunication
 
         internal void Exit()
         {
-            Waiter? next = null;
+            Waiter next = null;
             bool interrupted = EnterUninterruptibly(sync);
             try
             {
@@ -117,9 +134,9 @@ namespace RsCommunication
             }
         }
 
-        private Waiter? Advance()
+        private Waiter Advance()
         {
-            Waiter? next = head;
+            Waiter next = head;
             if (next == null)
             {
                 ownerThread = 0;
@@ -136,7 +153,7 @@ namespace RsCommunication
 
         private void Cancel(Waiter interrupted)
         {
-            Waiter? next = null;
+            Waiter next = null;
             EnterUninterruptibly(sync);
             try
             {
@@ -146,8 +163,8 @@ namespace RsCommunication
                 }
                 else
                 {
-                    Waiter? previous = null;
-                    for (Waiter? current = head; current != null; current = current.Next)
+                    Waiter previous = null;
+                    for (Waiter current = head; current != null; current = current.Next)
                     {
                         if (ReferenceEquals(current, interrupted))
                         {
@@ -168,7 +185,7 @@ namespace RsCommunication
         private sealed class Waiter
         {
             internal readonly int Thread;
-            internal Waiter? Next;
+            internal Waiter Next;
             private bool ready;
 
             internal Waiter(int thread) { Thread = thread; }
@@ -194,7 +211,6 @@ namespace RsCommunication
             }
         }
     }
-    #nullable restore
 
     public abstract class PlcClient : IDisposable
     {
@@ -235,40 +251,51 @@ namespace RsCommunication
         });
 
         public PlcResult<T> Read<T>(string address) where T : struct =>
-            UseResult(address, static (handle, state) =>
+            UseResult(address, (handle, state) =>
             {
+#if PLC_SPAN_BUFFERS
                 T value = default;
                 PlcStatus status = ReadValues(handle, state, MemoryMarshal.CreateSpan(ref value, 1));
                 return status == PlcStatus.Ok ? PlcResult<T>.Success(value) : NativeFailure<T>(status);
+#else
+                T[] values = ScalarBuffer<T>.Rent();
+                try
+                {
+                    PlcStatus status = ReadValues(handle, state, values, 0, 1);
+                    return status == PlcStatus.Ok ? PlcResult<T>.Success(values[0]) : NativeFailure<T>(status);
+                }
+                finally { ScalarBuffer<T>.Return(values); }
+#endif
             });
 
         public PlcResult<T[]> Read<T>(string address, int count) where T : struct =>
-            UseResult((address, count), static (handle, state) =>
+            UseResult((address, count), (handle, state) =>
             {
                 ByteLength(state.count, TypeInfo<T>().Width);
                 T[] values = new T[state.count];
-                PlcStatus status = ReadValues(handle, state.address, values.AsSpan());
+                PlcStatus status = ReadValues(handle, state.address, values, 0, values.Length);
                 return status == PlcStatus.Ok ? PlcResult<T[]>.Success(values) : NativeFailure<T[]>(status);
             });
 
         public PlcResult<int> ReadInto<T>(string address, T[] destination) where T : struct =>
-            UseResult((address, destination), static (handle, state) =>
+            UseResult((address, destination), (handle, state) =>
             {
                 if (state.destination == null) throw new ArgumentNullException(nameof(destination));
-                PlcStatus status = ReadValues(handle, state.address, state.destination.AsSpan());
+                PlcStatus status = ReadValues(handle, state.address, state.destination, 0, state.destination.Length);
                 return status == PlcStatus.Ok
                     ? PlcResult<int>.Success(state.destination.Length)
                     : NativeFailure<int>(status);
             });
 
         public PlcResult<int> ReadInto<T>(string address, T[] destination, int offset, int count) where T : struct =>
-            UseResult((address, destination, offset, count), static (handle, state) =>
+            UseResult((address, destination, offset, count), (handle, state) =>
             {
                 if (state.destination == null) throw new ArgumentNullException(nameof(destination));
-                PlcStatus status = ReadValues(handle, state.address, state.destination.AsSpan(state.offset, state.count));
+                PlcStatus status = ReadValues(handle, state.address, state.destination, state.offset, state.count);
                 return status == PlcStatus.Ok ? PlcResult<int>.Success(state.count) : NativeFailure<int>(status);
             });
 
+#if PLC_SPAN_BUFFERS
         public PlcResult<int> ReadInto<T>(string address, Span<T> destination) where T : struct =>
             TransferValues<T>(address, destination, default, false);
 
@@ -287,32 +314,46 @@ namespace RsCommunication
             return PlcStatus.Ok;
         }
 
+#endif
+
         public PlcResult<T> Write<T>(string address, T value) where T : struct =>
-            UseResult((address, value), static (handle, state) =>
+            UseResult((address, value), (handle, state) =>
             {
+#if PLC_SPAN_BUFFERS
                 T local = state.value;
                 PlcStatus status = WriteValues<T>(handle, state.address, MemoryMarshal.CreateReadOnlySpan(ref local, 1));
                 return status == PlcStatus.Ok ? PlcResult<T>.Success(state.value) : NativeFailure<T>(status);
+#else
+                T[] values = ScalarBuffer<T>.Rent();
+                try
+                {
+                    values[0] = state.value;
+                    PlcStatus status = WriteValues<T>(handle, state.address, values, 0, 1);
+                    return status == PlcStatus.Ok ? PlcResult<T>.Success(state.value) : NativeFailure<T>(status);
+                }
+                finally { ScalarBuffer<T>.Return(values); }
+#endif
             });
 
         public PlcResult<int> WriteAll<T>(string address, params T[] values) where T : struct =>
-            UseResult((address, values), static (handle, state) =>
+            UseResult((address, values), (handle, state) =>
             {
                 if (state.values == null) throw new ArgumentNullException(nameof(values));
-                PlcStatus status = WriteValues<T>(handle, state.address, state.values.AsSpan());
+                PlcStatus status = WriteValues<T>(handle, state.address, state.values, 0, state.values.Length);
                 return status == PlcStatus.Ok
                     ? PlcResult<int>.Success(state.values.Length)
                     : NativeFailure<int>(status);
             });
 
         public PlcResult<int> WriteAll<T>(string address, T[] values, int offset, int count) where T : struct =>
-            UseResult((address, values, offset, count), static (handle, state) =>
+            UseResult((address, values, offset, count), (handle, state) =>
             {
                 if (state.values == null) throw new ArgumentNullException(nameof(values));
-                PlcStatus status = WriteValues<T>(handle, state.address, state.values.AsSpan(state.offset, state.count));
+                PlcStatus status = WriteValues<T>(handle, state.address, state.values, state.offset, state.count);
                 return status == PlcStatus.Ok ? PlcResult<int>.Success(state.count) : NativeFailure<int>(status);
             });
 
+#if PLC_SPAN_BUFFERS
         public PlcResult<int> WriteAll<T>(string address, ReadOnlySpan<T> values) where T : struct =>
             TransferValues<T>(address, default, values, true);
 
@@ -371,6 +412,87 @@ namespace RsCommunication
             ConvertEndian(converted, width);
             return PlcNative.Write(handle, address, dataType, (uint)values.Length, converted.AsSpan());
         }
+#endif
+
+        private static PlcStatus ReadValues<T>(ulong handle, string address, T[] values, int offset, int count) where T : struct
+        {
+#if PLC_SPAN_BUFFERS
+            return ReadValues(handle, address, values.AsSpan(offset, count));
+#else
+            var (dataType, width) = TypeInfo<T>();
+            ValidateSlice(values.Length, offset, count);
+            int length = ByteLength(count, width);
+            GCHandle pinned = GCHandle.Alloc(values, GCHandleType.Pinned);
+            try
+            {
+                IntPtr buffer = IntPtr.Add(pinned.AddrOfPinnedObject(), checked(offset * width));
+                PlcStatus status = PlcNative.Read(handle, address, dataType, (uint)count, buffer, (uint)length, out uint written);
+                if (status != PlcStatus.Ok) return status;
+                if (written != length) throw new InvalidDataException("PLC returned an unexpected byte count.");
+                if (typeof(T) == typeof(bool))
+                    for (int index = 0; index < length; index++)
+                        if (Marshal.ReadByte(buffer, index) > 1) throw new InvalidDataException("PLC returned an invalid Boolean value.");
+                if (!BitConverter.IsLittleEndian && width > 1)
+                    for (int start = 0; start < length; start += width)
+                        for (int index = 0; index < width / 2; index++)
+                        {
+                            int left = start + index, right = start + width - index - 1;
+                            byte value = Marshal.ReadByte(buffer, left);
+                            Marshal.WriteByte(buffer, left, Marshal.ReadByte(buffer, right));
+                            Marshal.WriteByte(buffer, right, value);
+                        }
+                return PlcStatus.Ok;
+            }
+            finally { pinned.Free(); }
+#endif
+        }
+
+        private static PlcStatus WriteValues<T>(ulong handle, string address, T[] values, int offset, int count) where T : struct
+        {
+#if PLC_SPAN_BUFFERS
+            return WriteValues<T>(handle, address, values.AsSpan(offset, count));
+#else
+            var (dataType, width) = TypeInfo<T>();
+            ValidateSlice(values.Length, offset, count);
+            int length = ByteLength(count, width);
+            if (!BitConverter.IsLittleEndian && width > 1)
+            {
+                byte[] converted = new byte[length];
+                Buffer.BlockCopy(values, checked(offset * width), converted, 0, length);
+                for (int start = 0; start < length; start += width) Array.Reverse(converted, start, width);
+                return PlcNative.Write(handle, address, dataType, (uint)count, converted);
+            }
+            GCHandle pinned = GCHandle.Alloc(values, GCHandleType.Pinned);
+            try
+            {
+                IntPtr buffer = IntPtr.Add(pinned.AddrOfPinnedObject(), checked(offset * width));
+                return PlcNative.Write(handle, address, dataType, (uint)count, buffer, (uint)length);
+            }
+            finally { pinned.Free(); }
+#endif
+        }
+
+#if PLC_PINNED_BUFFERS
+        private static void ValidateSlice(int length, int offset, int count)
+        {
+            if ((uint)offset > (uint)length) throw new ArgumentOutOfRangeException(nameof(offset));
+            if ((uint)count > (uint)(length - offset)) throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        private static class ScalarBuffer<T> where T : struct
+        {
+            [ThreadStatic] private static T[] values;
+
+            internal static T[] Rent()
+            {
+                T[] available = values;
+                values = null;
+                return available ?? new T[1];
+            }
+
+            internal static void Return(T[] buffer) => values = buffer;
+        }
+#endif
 
         public PlcResult<string> ReadString(string address, int byteLength) =>
             ReadText(address, PlcStringKind.RawUtf8, byteLength);
@@ -412,7 +534,7 @@ namespace RsCommunication
         }
 
         private TResult Use<TResult>(Func<ulong, TResult> action) =>
-            Use(action, static (handle, operation) => operation(handle));
+            Use(action, (handle, operation) => operation(handle));
 
         private TResult Use<TState, TResult>(TState state, Func<ulong, TState, TResult> action)
         {
@@ -441,7 +563,7 @@ namespace RsCommunication
         });
 
         private PlcResult<T> UseResult<T>(Func<ulong, PlcResult<T>> operation) =>
-            UseResult(operation, static (handle, action) => action(handle));
+            UseResult(operation, (handle, action) => action(handle));
 
         private PlcResult<T> UseResult<TState, T>(TState state, Func<ulong, TState, PlcResult<T>> operation)
         {
@@ -477,12 +599,14 @@ namespace RsCommunication
             return count * width;
         }
 
+#if PLC_SPAN_BUFFERS
         private static void ConvertEndian(Span<byte> buffer, int width)
         {
             if (BitConverter.IsLittleEndian || width == 1) return;
             for (int offset = 0; offset < buffer.Length; offset += width)
                 buffer.Slice(offset, width).Reverse();
         }
+#endif
 
         private static (PlcDataType DataType, int Width) TypeInfo<T>() where T : struct
         {

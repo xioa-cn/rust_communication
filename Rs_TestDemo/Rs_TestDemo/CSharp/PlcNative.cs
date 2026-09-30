@@ -1,3 +1,21 @@
+#if NETFRAMEWORK
+#define PLC_PINNED_BUFFERS
+#elif NETSTANDARD
+#if NETSTANDARD2_1 || NETSTANDARD2_1_OR_GREATER
+#define PLC_SPAN_BUFFERS
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+#elif NETCOREAPP
+#if NETCOREAPP3_0 || NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER
+#define PLC_SPAN_BUFFERS
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -125,7 +143,11 @@ namespace RsCommunication
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
             EntryPoint = "plc_create")]
         private static extern PlcStatus CreateNative(ref PlcOptions options,
+#if PLC_PINNED_BUFFERS
+            [In] byte[] host, out ulong handle);
+#else
             [MarshalAs(UnmanagedType.LPUTF8Str)] string host, out ulong handle);
+#endif
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
             EntryPoint = "plc_create_serial")]
@@ -149,44 +171,85 @@ namespace RsCommunication
         public static extern PlcStatus Destroy(ulong handle);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read")]
+#if PLC_PINNED_BUFFERS
+        private static extern PlcStatus ReadNative(ulong handle, [In] byte[] address,
+#else
         private static extern PlcStatus ReadNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
             PlcDataType dataType, uint count, [Out] byte[] buffer, uint capacity, out uint written);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read")]
         private static extern PlcStatus ReadBufferNative(ulong handle,
+#if PLC_PINNED_BUFFERS
+            [In] byte[] address,
+#else
             [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
             PlcDataType dataType, uint count, ref byte buffer, uint capacity, out uint written);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
             EntryPoint = "plc_write")]
+#if PLC_PINNED_BUFFERS
+        private static extern PlcStatus WriteNative(ulong handle, [In] byte[] address,
+#else
         private static extern PlcStatus WriteNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
             PlcDataType dataType, uint count, [In] byte[] buffer, uint length);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write")]
+#if PLC_PINNED_BUFFERS
+        private static extern PlcStatus WriteBufferNative(ulong handle, [In] byte[] address,
+#else
         private static extern PlcStatus WriteBufferNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
             PlcDataType dataType, uint count, ref byte buffer, uint length);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
             EntryPoint = "plc_read_string")]
         private static extern PlcStatus ReadStringNative(ulong handle,
+#if PLC_PINNED_BUFFERS
+            [In] byte[] address,
+#else
             [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
             PlcStringKind kind, uint byteLength, [Out] byte[] buffer, uint capacity, out uint written);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
             EntryPoint = "plc_write_string")]
         private static extern PlcStatus WriteStringNative(ulong handle,
+#if PLC_PINNED_BUFFERS
+            [In] byte[] address,
+#else
             [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
             PlcStringKind kind, [In] byte[] buffer, uint byteLength);
 
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true,
             EntryPoint = "plc_last_error")]
         private static extern uint LastError([Out] byte[] buffer, uint capacity);
 
-        private static string ValidateText(string value)
+#if PLC_PINNED_BUFFERS
+        [ThreadStatic] private static string cachedText;
+        [ThreadStatic] private static byte[] cachedTextBytes;
+
+        internal static byte[] ValidateText(string value)
+#else
+        internal static string ValidateText(string value)
+#endif
         {
             if (string.IsNullOrEmpty(value) || value.IndexOf('\0') >= 0)
                 throw new ArgumentException("Host/address must be nonempty and contain no NUL characters.");
+#if PLC_PINNED_BUFFERS
+            if (value == cachedText) return cachedTextBytes;
+            int length = Encoding.UTF8.GetByteCount(value);
+            byte[] bytes = new byte[checked(length + 1)];
+            Encoding.UTF8.GetBytes(value, 0, value.Length, bytes, 0);
+            cachedTextBytes = bytes;
+            cachedText = value;
+            return bytes;
+#else
             return value;
+#endif
         }
 
         private static uint BufferLength(byte[] buffer)
@@ -214,6 +277,7 @@ namespace RsCommunication
             return WriteNative(handle, ValidateText(address), dataType, count, buffer, BufferLength(buffer));
         }
 
+#if PLC_SPAN_BUFFERS
         public static PlcStatus Write(ulong handle, string address, PlcDataType dataType, uint count, ReadOnlySpan<byte> buffer)
         {
             if (buffer.IsEmpty || buffer.Length > MaxBufferBytes)
@@ -230,6 +294,39 @@ namespace RsCommunication
             return ReadBufferNative(handle, ValidateText(address), dataType, count,
                 ref MemoryMarshal.GetReference(buffer), (uint)buffer.Length, out written);
         }
+#else
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_read")]
+#if PLC_PINNED_BUFFERS
+        private static extern PlcStatus ReadPointerNative(ulong handle, [In] byte[] address,
+#else
+        private static extern PlcStatus ReadPointerNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
+            PlcDataType dataType, uint count, IntPtr output, uint capacity, out uint written);
+
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_write")]
+#if PLC_PINNED_BUFFERS
+        private static extern PlcStatus WritePointerNative(ulong handle, [In] byte[] address,
+#else
+        private static extern PlcStatus WritePointerNative(ulong handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string address,
+#endif
+            PlcDataType dataType, uint count, IntPtr input, uint length);
+
+        public static PlcStatus Read(ulong handle, string address, PlcDataType dataType,
+            uint count, IntPtr buffer, uint capacity, out uint written)
+        {
+            if (buffer == IntPtr.Zero || capacity == 0 || capacity > MaxBufferBytes)
+                throw new ArgumentException("The buffer must contain 1..1048576 bytes.", nameof(buffer));
+            return ReadPointerNative(handle, ValidateText(address), dataType, count, buffer, capacity, out written);
+        }
+
+        public static PlcStatus Write(ulong handle, string address, PlcDataType dataType,
+            uint count, IntPtr buffer, uint length)
+        {
+            if (buffer == IntPtr.Zero || length == 0 || length > MaxBufferBytes)
+                throw new ArgumentException("The buffer must contain 1..1048576 bytes.", nameof(buffer));
+            return WritePointerNative(handle, ValidateText(address), dataType, count, buffer, length);
+        }
+#endif
 
         public static PlcStatus ReadString(ulong handle, string address, PlcStringKind kind,
             uint byteLength, byte[] buffer, out uint written)

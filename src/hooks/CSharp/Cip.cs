@@ -1,3 +1,21 @@
+#if NETFRAMEWORK
+#define PLC_PINNED_BUFFERS
+#elif NETSTANDARD
+#if NETSTANDARD2_1 || NETSTANDARD2_1_OR_GREATER
+#define PLC_SPAN_BUFFERS
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+#elif NETCOREAPP
+#if NETCOREAPP3_0 || NETCOREAPP3_1 || NET5_0 || NET5_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER
+#define PLC_SPAN_BUFFERS
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+#else
+#define PLC_PINNED_BUFFERS
+#endif
+
 using System;
 using System.Runtime.InteropServices;
 
@@ -94,7 +112,11 @@ namespace RsCommunication
 
         [DllImport(PlcNative.Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true, EntryPoint = "plc_create_cip")]
         private static extern PlcStatus CreateNative(ref PlcCipOptions options,
+#if PLC_PINNED_BUFFERS
+            [In] byte[] host, [In] byte[] route, uint routeLength, out ulong handle);
+#else
             [MarshalAs(UnmanagedType.LPUTF8Str)] string host, [In] byte[] route, uint routeLength, out ulong handle);
+#endif
 
         internal static PlcCipOptions Options(CipVendor vendor)
         {
@@ -106,7 +128,7 @@ namespace RsCommunication
         {
             if (string.IsNullOrEmpty(host) || host.IndexOf('\0') >= 0)
                 throw new ArgumentException("Host must be nonempty and contain no NUL characters.", nameof(host));
-            return CreateNative(ref options, host, route, (uint)route.Length, out handle);
+            return CreateNative(ref options, PlcNative.ValidateText(host), route, (uint)route.Length, out handle);
         }
     }
 }

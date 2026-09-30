@@ -28,12 +28,13 @@ namespace RsCommunication
         private static PlcOptions Configure(OmronOptions configuration)
         {
             if (configuration == null) throw new ArgumentNullException(nameof(configuration));
-            PlcProtocol protocol = configuration.Protocol switch
+            PlcProtocol protocol;
+            switch (configuration.Protocol)
             {
-                OmronProtocol.FinsTcp => PlcProtocol.FinsTcp,
-                OmronProtocol.FinsUdp => PlcProtocol.FinsUdp,
-                _ => throw new ArgumentOutOfRangeException(nameof(configuration.Protocol))
-            };
+                case OmronProtocol.FinsTcp: protocol = PlcProtocol.FinsTcp; break;
+                case OmronProtocol.FinsUdp: protocol = PlcProtocol.FinsUdp; break;
+                default: throw new ArgumentOutOfRangeException(nameof(configuration.Protocol));
+            }
             PlcOptions options = configuration.NativeOptions(protocol);
             options.ByteOrder = configuration.ByteOrder;
             options.FinsDestinationNetwork = configuration.DestinationNetwork;

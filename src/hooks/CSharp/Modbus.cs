@@ -43,12 +43,13 @@ namespace RsCommunication
         private static PlcOptions Configure(ModbusOptions configuration)
         {
             if (configuration == null) throw new ArgumentNullException(nameof(configuration));
-            PlcProtocol protocol = configuration.Protocol switch
+            PlcProtocol protocol;
+            switch (configuration.Protocol)
             {
-                ModbusProtocol.Tcp => PlcProtocol.ModbusTcp,
-                ModbusProtocol.Udp => PlcProtocol.ModbusUdp,
-                _ => throw new ArgumentOutOfRangeException(nameof(configuration.Protocol))
-            };
+                case ModbusProtocol.Tcp: protocol = PlcProtocol.ModbusTcp; break;
+                case ModbusProtocol.Udp: protocol = PlcProtocol.ModbusUdp; break;
+                default: throw new ArgumentOutOfRangeException(nameof(configuration.Protocol));
+            }
             PlcOptions options = configuration.NativeOptions(protocol);
             options.UnitId = configuration.UnitId;
             options.ByteOrder = configuration.ByteOrder;
