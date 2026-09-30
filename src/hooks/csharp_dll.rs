@@ -7,6 +7,7 @@
 //! Unwinding panics become error codes; invalid pointers and aborting panics cannot be caught.
 
 use crate::communication::{
+    ethernet::{CipClient, CipOptions, CipValue, CipVendor},
     inovace::{InovanceModbusTcp, InovanceType},
     melsec::{
         MelsecA1EAsciiNet, MelsecA1ENet, MelsecMcAsciiNet, MelsecMcAsciiUdp, MelsecMcNet,
@@ -44,6 +45,131 @@ pub const PLC_OPERATION_FAILED: i32 = -5;
 pub const PLC_INTERNAL_ERROR: i32 = -6;
 pub const PLC_MAX_BUFFER_BYTES: u32 = 1_048_576;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PlcCipOptions {
+    pub struct_size: u32,
+    pub vendor: u32,
+    pub port: u32,
+    pub connect_timeout_ms: u32,
+    pub receive_timeout_ms: u32,
+    pub connected: u32,
+    pub connection_size: u32,
+    pub packet_interval_us: u32,
+    pub timeout_multiplier: u32,
+    pub originator_vendor_id: u32,
+    pub originator_serial: u32,
+}
+
+fn cip_vendor(vendor: u32) -> FfiResult<CipVendor> {
+    match vendor {
+        1 => Ok(CipVendor::Omron),
+        2 => Ok(CipVendor::Melsec),
+        3 => Ok(CipVendor::Inovance),
+        _ => Err(invalid("Unknown CIP vendor")),
+    }
+}
+
+impl PlcCipOptions {
+    fn for_vendor(vendor: u32) -> FfiResult<Self> {
+        let defaults = if cip_vendor(vendor)? == CipVendor::Inovance {
+            CipOptions::connected()
+        } else {
+            CipOptions::default()
+        };
+        Ok(Self {
+            struct_size: size_of::<Self>() as u32,
+            vendor,
+            port: 44818,
+            connect_timeout_ms: 5000,
+            receive_timeout_ms: 5000,
+            connected: u32::from(defaults.connected),
+            connection_size: defaults.connection_size.into(),
+            packet_interval_us: defaults.packet_interval_us,
+            timeout_multiplier: defaults.timeout_multiplier.into(),
+            originator_vendor_id: defaults.originator_vendor_id.into(),
+            originator_serial: defaults.originator_serial,
+        })
+    }
+}
+
+/// # Safety
+/// Output must point to writable storage of exactly `output_size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plc_default_cip_options(
+    vendor: u32,
+    output: *mut PlcCipOptions,
+    output_size: u32,
+) -> i32 {
+    ffi_call(|| {
+        require(
+            !output.is_null() && output_size == size_of::<PlcCipOptions>() as u32,
+            "Invalid CIP options output or size",
+        )?;
+        unsafe { ptr::write_unaligned(output, PlcCipOptions::for_vendor(vendor)?) };
+        Ok(())
+    })
+}
+
+/// # Safety
+/// Options and host must be readable; host is NUL-terminated UTF-8. Route contains
+/// `route_length` readable bytes (may be null when zero); output is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plc_create_cip(
+    config: *const PlcCipOptions,
+    host: *const c_char,
+    route: *const u8,
+    route_length: u32,
+    output: *mut u64,
+) -> i32 {
+    ffi_call(|| {
+        require(!output.is_null(), "Handle output is null")?;
+        unsafe { ptr::write_unaligned(output, 0) };
+        require(!config.is_null(), "CIP options are null")?;
+        require(
+            unsafe { ptr::read_unaligned(config.cast::<u32>()) }
+                == size_of::<PlcCipOptions>() as u32,
+            "CIP options size does not match this DLL ABI",
+        )?;
+        let config = unsafe { ptr::read_unaligned(config) };
+        let vendor = cip_vendor(config.vendor)?;
+        require(config.connected <= 1, "CIP connected must be zero or one")?;
+        require(
+            route_length <= 500 && route_length % 2 == 0,
+            "CIP route must be even and at most 500 bytes",
+        )?;
+        require(route_length == 0 || !route.is_null(), "CIP route is null")?;
+        let route = if route_length == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(route, route_length as usize) }.to_vec()
+        };
+        let mut common = PlcOptions::for_protocol(config.vendor + 15)?;
+        common.connect_timeout_ms = config.connect_timeout_ms;
+        common.receive_timeout_ms = config.receive_timeout_ms;
+        let port = word(config.port)?;
+        require(port != 0, "CIP port must be positive")?;
+        let address = unsafe { text(host)? }
+            .parse::<IpAddr>()
+            .map_err(|_| invalid("Host must be an IP address"))?;
+        let mut client = CipClient::new(address, port, vendor, common.timeout()?);
+        let options = CipOptions {
+            connected: config.connected != 0,
+            route,
+            connection_size: word(config.connection_size)?,
+            packet_interval_us: config.packet_interval_us,
+            timeout_multiplier: byte(config.timeout_multiplier)?,
+            originator_vendor_id: word(config.originator_vendor_id)?,
+            originator_serial: config.originator_serial,
+        };
+        options.validate().map_err(|error| invalid(&error))?;
+        operation(client.set_options(options))?;
+        let handle = register(Device::Cip(client))?;
+        unsafe { ptr::write_unaligned(output, handle) };
+        Ok(())
+    })
+}
+
 /// All fields are 32-bit integers; initialize with `plc_default_options` before editing.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -79,7 +205,7 @@ pub struct PlcOptions {
 
 impl PlcOptions {
     fn for_protocol(protocol: u32) -> FfiResult<Self> {
-        require((1..=15).contains(&protocol), "Unknown protocol")?;
+        require((1..=18).contains(&protocol), "Unknown protocol")?;
         Ok(Self {
             struct_size: size_of::<Self>() as u32,
             protocol,
@@ -87,6 +213,7 @@ impl PlcOptions {
                 1 => 102,
                 2..=8 => 6000,
                 9 | 10 => 9600,
+                16..=18 => 44818,
                 _ => 502,
             },
             connect_timeout_ms: 5000,
@@ -214,6 +341,7 @@ impl Write for CallbackStream {
 }
 
 enum Device {
+    Cip(CipClient),
     S7(S7Net),
     Mc(MelsecMcNet),
     McAscii(MelsecMcAsciiNet),
@@ -233,7 +361,11 @@ enum Device {
 
 macro_rules! dispatch {
     ($device:expr, $client:ident, $operation:expr) => {
+        dispatch!($device, $client, $operation, $operation)
+    };
+    ($device:expr, $client:ident, $operation:expr, $cip_operation:expr) => {
         match $device {
+            Device::Cip($client) => $cip_operation,
             Device::S7($client) => $operation,
             Device::Mc($client) => $operation,
             Device::McAscii($client) => $operation,
@@ -256,6 +388,7 @@ macro_rules! dispatch {
 macro_rules! dispatch_bytes {
     ($device:expr, $client:ident, $operation:expr) => {
         match $device {
+            Device::Cip($client) => $operation,
             Device::S7($client) => $operation,
             Device::Mc($client) => $operation,
             Device::McAscii($client) => $operation,
@@ -385,7 +518,7 @@ unsafe fn options(value: *const PlcOptions) -> FfiResult<PlcOptions> {
         "Options size does not match this DLL ABI",
     )?;
     let options = unsafe { ptr::read_unaligned(value) };
-    require((1..=15).contains(&options.protocol), "Unknown protocol")?;
+    require((1..=18).contains(&options.protocol), "Unknown protocol")?;
     options.timeout()?;
     options.byte_order()?;
     Ok(options)
@@ -509,11 +642,17 @@ fn network_device(options: PlcOptions, address: IpAddr) -> FfiResult<Device> {
             client.set_byte_order(options.byte_order()?);
             Device::Inovance(client)
         }
+        16..=18 => Device::Cip(CipClient::new(
+            address,
+            port,
+            cip_vendor(options.protocol - 15)?,
+            timeout,
+        )),
         _ => return Err(invalid("RTU/ASCII require plc_create_serial")),
     })
 }
 
-trait AbiValue: Sized {
+trait AbiValue: Sized + CipValue {
     const SIZE: usize;
     fn decode(bytes: &[u8]) -> FfiResult<Self>;
     fn encode(&self, output: &mut [MaybeUninit<u8>]);
@@ -628,6 +767,19 @@ fn read_values<Value: AbiValue>(
     output: &mut [MaybeUninit<u8>],
 ) -> FfiResult<()> {
     let count = output.len() / Value::SIZE;
+    if let Device::Cip(client) = device {
+        let bytes = client
+            .read_raw::<Value>(address, count)
+            .map_err(|error| FfiError(PLC_OPERATION_FAILED, error))?;
+        for (source, destination) in bytes.iter().zip(output) {
+            destination.write(if Value::TYPE_CODE == 0xc1 {
+                u8::from(*source != 0)
+            } else {
+                *source
+            });
+        }
+        return Ok(());
+    }
     let values = Value::read(device, address, count)?;
     if values.len() != count {
         return Err(FfiError(
@@ -646,13 +798,22 @@ fn write_values<Value: AbiValue>(
     address: &str,
     bytes: &[u8],
 ) -> FfiResult<()> {
+    if let Device::Cip(client) = device {
+        if Value::TYPE_CODE == 0xc1 && bytes.iter().any(|value| *value > 1) {
+            return Err(invalid("Bool payload must contain only 0 or 1"));
+        }
+        return client
+            .write_raw::<Value>(address, bytes)
+            .map(|_| ())
+            .map_err(|error| FfiError(PLC_OPERATION_FAILED, error));
+    }
     if bytes.len() == Value::SIZE {
-        let value = Value::decode(bytes)?;
+        let value = <Value as AbiValue>::decode(bytes)?;
         return Value::write(device, address, std::slice::from_ref(&value));
     }
     let values = bytes
         .chunks_exact(Value::SIZE)
-        .map(Value::decode)
+        .map(<Value as AbiValue>::decode)
         .collect::<FfiResult<Vec<_>>>()?;
     Value::write(device, address, &values)
 }
@@ -900,7 +1061,8 @@ pub unsafe extern "C" fn plc_write(
     })
 }
 
-/// Kind 0 reads `byte_length` raw UTF-8 bytes. Kind 1 reads S7 STRING (byte_length must be zero).
+/// Kind 0 reads raw UTF-8, or one Omron CIP STRING with `byte_length` as its output limit.
+/// Kind 1 reads S7 STRING (byte_length must be zero).
 /// S7 STRING requires a 254-byte output buffer before any PLC I/O; written is its actual UTF-8 size.
 /// # Safety
 /// Address/output/written follow the same pointer contract as `plc_read`.
@@ -937,6 +1099,15 @@ pub unsafe extern "C" fn plc_read_string(
         let address = unsafe { text(address)? };
         unsafe { prepare_output(output, capacity, written, required)? };
         let value = with_device(handle, |device| {
+            if let Device::Cip(client) = device {
+                if kind != 0 || client.vendor() != CipVendor::Omron {
+                    return Err(FfiError(
+                        PLC_NOT_SUPPORTED,
+                        "CIP string reading requires Omron STRING (0x00D0); S7 STRING and UDT layouts are not supported".into(),
+                    ));
+                }
+                return operation(client.read_string(address, byte_length as usize));
+            }
             if kind == 0 {
                 operation(dispatch!(
                     device,
@@ -993,6 +1164,12 @@ pub unsafe extern "C" fn plc_write_string(
         let value =
             std::str::from_utf8(bytes).map_err(|_| invalid("String payload must be UTF-8"))?;
         with_device(handle, |device| {
+            if matches!(device, Device::Cip(_)) {
+                return Err(FfiError(
+                    PLC_NOT_SUPPORTED,
+                    "CIP STRING/UDT layout is not supported; use typed atomic tags".into(),
+                ));
+            }
             if kind == 1 {
                 match device {
                     Device::S7(client) => {
@@ -1009,7 +1186,8 @@ pub unsafe extern "C" fn plc_write_string(
                 operation(dispatch!(
                     device,
                     client,
-                    client.write::<String>(address, value.to_owned())
+                    client.write::<String>(address, value.to_owned()),
+                    client.write_string(address, value)
                 ))
                 .map(|_| ())
             }

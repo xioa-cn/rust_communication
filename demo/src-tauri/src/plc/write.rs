@@ -69,6 +69,9 @@ pub fn write(
     request: &WriteRequest,
 ) -> Result<(usize, &'static str), String> {
     validate_write(request)?;
+    if let PlcClient::Cip(inner) = client {
+        return super::cip::write(inner, request);
+    }
     if client.protocol().is_modbus() {
         let unit = if request.data_type == DataType::RawString {
             "字节"

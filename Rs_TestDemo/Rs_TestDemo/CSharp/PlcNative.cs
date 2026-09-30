@@ -21,7 +21,10 @@ namespace RsCommunication
         ModbusUdp = 12,
         ModbusRtu = 13,
         ModbusAscii = 14,
-        InovanceModbusTcp = 15
+        InovanceModbusTcp = 15,
+        OmronCip = 16,
+        MelsecCip = 17,
+        InovanceCip = 18
     }
 
     internal enum PlcDataType : uint

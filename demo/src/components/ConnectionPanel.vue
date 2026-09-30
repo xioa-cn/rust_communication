@@ -4,7 +4,8 @@ import { NButton, NCollapse, NCollapseItem, NForm, NFormItem, NIcon, NInput, NIn
 import type { FormInst, FormRules } from 'naive-ui'
 import { ArrowForwardOutline, HardwareChipOutline, LinkOutline } from '@vicons/ionicons5'
 import type { ConnectRequest, ConnectionStatus, PlcProtocol } from '../types'
-import { isInovanceProtocol, isModbusProtocol, isOmronProtocol, isSerialProtocol, protocolLabels } from '../types'
+import { defaultCipOptions, isCipProtocol, isInovanceProtocol, isModbusProtocol, isOmronProtocol, isSerialProtocol, protocolLabels } from '../types'
+import { parseCipRoute, validateCipOptions } from '../cip'
 import { createDeviceConnection, getDeviceProfile } from '../deviceCatalog'
 
 const props = defineProps<{ deviceId: string; connection: ConnectionStatus; busy: boolean; pending: string; desktop: boolean }>()
@@ -14,6 +15,20 @@ const form = reactive<ConnectRequest>(createDeviceConnection(props.deviceId))
 const drafts = new Map<string, ConnectRequest>()
 const formRef = ref<FormInst | null>(null)
 const isS7 = computed(() => form.protocol === 's7')
+const isCip = computed(() => isCipProtocol(form.protocol))
+const cipRouteText = ref('')
+const cipModes = [{ label: 'UCMM · 非连接消息', value: 'ucmm' }, { label: 'Class 3 · 连接消息', value: 'connected' }]
+const cipMode = computed({
+  get: () => form.cip.connected ? 'connected' : 'ucmm',
+  set: (value: string) => { form.cip.connected = value === 'connected'; form.cip.connectionSize = form.cip.connected ? 1996 : 500 },
+})
+watch(() => form.cip.route, route => { cipRouteText.value = route.join(', ') }, { immediate: true })
+watch(cipRouteText, text => {
+  try {
+    const route = parseCipRoute(text)
+    if (route.join(',') !== form.cip.route.join(',')) form.cip.route = route
+  } catch { }
+})
 const isModbus = computed(() => isModbusProtocol(form.protocol))
 const isOmron = computed(() => isOmronProtocol(form.protocol))
 const isInovance = computed(() => isInovanceProtocol(form.protocol))
@@ -21,6 +36,8 @@ const inovanceModels = computed(() => (device.value.inovanceSeries ?? []).map(se
 const isSerial = computed(() => isSerialProtocol(form.protocol))
 const isUdp = computed(() => ['mc_udp_binary', 'mc_udp_ascii', 'modbus_udp', 'omron_fins_udp'].includes(form.protocol))
 const protocolHint = computed(() => {
+  if (form.protocol === 'omron_cip') return 'EtherNet/IP 默认端口 44818；支持符号标签、原子类型数组及 STRING（0x00D0）读取。字符串数组逐元素读取；不支持 STRING 写入、UDT 和打包 BOOL 数组。'
+  if (isCip.value) return 'EtherNet/IP 默认端口 44818；使用符号标签，支持原子类型及数组，不支持 STRING/UDT 和打包 BOOL 数组。连接模式与报文大小须由目标 PLC 支持。'
   if (form.protocol === 's7') return 'S7 默认端口 102；机架、槽位和 TSAP 由 S7 连接组态决定。'
   if (isOmron.value) return form.protocol === 'omron_fins_tcp'
     ? '节点 0 表示自动协商；默认端口 9600、字节序 CDAB。仅支持 IPv4，跨网络请配置路由。'
@@ -76,6 +93,13 @@ watch(() => form.protocol, protocol => {
   emit('protocolChange', protocol)
   validationError.value = ''
   formRef.value?.restoreValidation()
+  if (isCipProtocol(protocol)) {
+    form.port = 44818
+    form.cip = defaultCipOptions(protocol)
+    form.localTsap = ''
+    form.remoteTsap = ''
+    return
+  }
   if (isOmronProtocol(protocol)) {
     form.port = 9600
     form.localTsap = ''
@@ -118,7 +142,7 @@ watch(() => form.serial.parity, parity => {
 }, { flush: 'sync' })
 
 watch(() => props.deviceId, (id, previousId) => {
-  drafts.set(previousId, { ...form, melsec: { ...form.melsec }, modbus: { ...form.modbus }, omron: { ...form.omron }, inovance: { ...form.inovance }, serial: { ...form.serial } })
+  drafts.set(previousId, { ...form, melsec: { ...form.melsec }, modbus: { ...form.modbus }, omron: { ...form.omron }, inovance: { ...form.inovance }, cip: { ...form.cip, route: [...form.cip.route] }, serial: { ...form.serial } })
   const next = drafts.get(id) ?? createDeviceConnection(id)
   const stopBits = next.serial.stopBits
   form.protocol = next.protocol
@@ -137,6 +161,10 @@ async function connect() {
   if (!props.desktop || props.busy || props.connection.connected || !formRef.value) return
   validationError.value = ''
   try { await formRef.value.validate() } catch { return }
+  if (isCip.value) {
+    try { form.cip.route = parseCipRoute(cipRouteText.value); validateCipOptions(form.cip) }
+    catch (error) { validationError.value = error instanceof Error ? error.message : String(error); return }
+  }
   if (isOmron.value && form.omron.destinationNetwork !== 0 && form.omron.destinationNode === 0) {
     validationError.value = '跨网络 FINS 通讯必须显式填写目标节点 DA1（1–254）。'
     return
@@ -155,9 +183,9 @@ async function connect() {
     validationError.value = 'S7 的 TSAP 请同时填写 1–4 位十六进制数，或同时留空。'
     return
   }
-  emit('connect', { ...form, host: form.host.trim(), port: form.port, localTsap, remoteTsap, melsec: { ...form.melsec }, modbus: { ...form.modbus }, omron: { ...form.omron }, inovance: { ...form.inovance }, serial: { ...form.serial, path: form.serial.path.trim() } })
+  emit('connect', { ...form, host: form.host.trim(), port: form.port, localTsap, remoteTsap, melsec: { ...form.melsec }, modbus: { ...form.modbus }, omron: { ...form.omron }, inovance: { ...form.inovance }, cip: { ...form.cip, route: [...form.cip.route] }, serial: { ...form.serial, path: form.serial.path.trim() } })
 }
-watch(form, () => emit('configurationChange', { ...form, melsec: { ...form.melsec }, modbus: { ...form.modbus }, omron: { ...form.omron }, inovance: { ...form.inovance }, serial: { ...form.serial } }), { deep: true, immediate: true })
+watch(form, () => emit('configurationChange', { ...form, melsec: { ...form.melsec }, modbus: { ...form.modbus }, omron: { ...form.omron }, inovance: { ...form.inovance }, cip: { ...form.cip, route: [...form.cip.route] }, serial: { ...form.serial } }), { deep: true, immediate: true })
 </script>
 
 <template>
@@ -173,7 +201,7 @@ watch(form, () => emit('configurationChange', { ...form, melsec: { ...form.melse
         <h3 id="connection-address-title">{{ isSerial ? '串口设置' : '通讯地址' }}</h3>
         <div v-if="!isSerial" class="connection-grid connection-address-grid">
           <NFormItem label="IP 地址" path="host"><NInput v-model:value="form.host" placeholder="192.168.0.1" :input-props="{ spellcheck: false, 'aria-label': 'IP 地址' }" /></NFormItem>
-          <NFormItem label="端口" path="port"><NInputNumber :key="form.protocol" v-model:value="form.port" :min="1" :max="65535" :precision="0" :show-button="false" :input-props="{ 'aria-label': isInovance ? '汇川端口，默认 502' : isModbus ? 'Modbus 端口，默认 502' : isOmron ? 'FINS 端口，默认 9600' : isS7 ? 'S7 端口，默认 102' : '三菱端口，默认 6000' }" /></NFormItem>
+          <NFormItem label="端口" path="port"><NInputNumber :key="form.protocol" v-model:value="form.port" :min="1" :max="65535" :precision="0" :show-button="false" :input-props="{ 'aria-label': isCip ? 'EtherNetIP 端口，默认 44818' : isInovance ? '汇川端口，默认 502' : isModbus ? 'Modbus 端口，默认 502' : isOmron ? 'FINS 端口，默认 9600' : isS7 ? 'S7 端口，默认 102' : '三菱端口，默认 6000' }" /></NFormItem>
         </div>
         <div v-else class="connection-grid connection-grid-three">
           <NFormItem label="串口名" path="serial.path"><NInput v-model:value="form.serial.path" placeholder="COM3 / /dev/ttyUSB0" :input-props="{ 'aria-label': '串口名', spellcheck: false }" /></NFormItem>
@@ -199,6 +227,11 @@ watch(form, () => emit('configurationChange', { ...form, melsec: { ...form.melse
           <NFormItem label="汇川型号"><NSelect v-model:value="form.inovance.series" :options="inovanceModels" :disabled="busy || connection.connected || inovanceModels.length === 1" aria-label="汇川型号" /></NFormItem>
           <NFormItem label="站号 · Unit ID" path="inovance.unitId"><NInputNumber v-model:value="form.inovance.unitId" :min="1" :max="255" :precision="0" :show-button="false" :input-props="{ 'aria-label': '汇川站号' }" /></NFormItem>
           <NFormItem label="数值字节序"><NSelect v-model:value="form.inovance.byteOrder" :options="byteOrders" aria-label="汇川字节序" /></NFormItem>
+        </div>
+        <div v-else-if="isCip" class="connection-grid">
+          <NFormItem label="连接模式"><NSelect v-model:value="cipMode" :options="cipModes" aria-label="CIP 连接模式" /></NFormItem>
+          <NFormItem label="报文大小 / bytes"><NInputNumber v-model:value="form.cip.connectionSize" :min="128" :max="form.cip.connected ? 4000 : 504" :precision="0" :show-button="false" :input-props="{ 'aria-label': 'CIP 报文大小' }" /></NFormItem>
+          <NFormItem label="路由字节 · 留空直连"><NInput v-model:value="cipRouteText" placeholder="1, 0（背板槽位 0）" :input-props="{ 'aria-label': 'CIP 路由字节', spellcheck: false }" /></NFormItem>
         </div>
         <div v-else-if="isOmron" class="connection-grid connection-grid-three">
           <NFormItem label="源节点 · SA1" path="omron.sourceNode"><NInputNumber v-model:value="form.omron.sourceNode" :min="0" :max="254" :precision="0" :show-button="false" :input-props="{ 'aria-label': 'FINS 源节点 SA1' }" /></NFormItem>
@@ -226,6 +259,10 @@ watch(form, () => emit('configurationChange', { ...form, melsec: { ...form.melse
             </template>
             <template v-else-if="isOmron">
               <NFormItem v-for="field in omronRouteFields" :key="field.key" :label="field.label" :path="`omron.${field.key}`"><NInputNumber v-model:value="form.omron[field.key]" :min="0" :max="field.max" :precision="0" :show-button="false" :input-props="{ 'aria-label': `FINS ${field.label}` }" /></NFormItem>
+            </template>
+            <template v-else-if="isCip">
+              <NFormItem label="RPI / μs"><NInputNumber v-model:value="form.cip.packetIntervalUs" :min="1" :max="4294967295" :precision="0" :show-button="false" :input-props="{ 'aria-label': 'CIP RPI' }" /></NFormItem>
+              <NFormItem label="连接超时倍率"><NInputNumber v-model:value="form.cip.timeoutMultiplier" :min="0" :max="7" :precision="0" :show-button="false" :input-props="{ 'aria-label': 'CIP 超时倍率' }" /></NFormItem>
             </template>
             <NFormItem v-else-if="!isModbus && !isInovance" label="监视定时器"><NInputNumber v-model:value="form.melsec.monitoringTimer" :min="0" :max="65535" :precision="0" :show-button="false" :input-props="{ 'aria-label': '监视定时器' }" /></NFormItem>
           </div>

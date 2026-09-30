@@ -28,17 +28,34 @@ namespace RsCommunication
         private static PlcOptions Configure(MelsecOptions configuration)
         {
             if (configuration == null) throw new ArgumentNullException(nameof(configuration));
-            PlcProtocol protocol = configuration.Protocol switch
+            PlcProtocol protocol;
+            switch (configuration.Protocol)
             {
-                MelsecProtocol.McBinaryTcp => PlcProtocol.McBinaryTcp,
-                MelsecProtocol.McAsciiTcp => PlcProtocol.McAsciiTcp,
-                MelsecProtocol.McBinaryUdp => PlcProtocol.McBinaryUdp,
-                MelsecProtocol.McAsciiUdp => PlcProtocol.McAsciiUdp,
-                MelsecProtocol.A1eBinaryTcp => PlcProtocol.A1eBinaryTcp,
-                MelsecProtocol.A1eAsciiTcp => PlcProtocol.A1eAsciiTcp,
-                MelsecProtocol.McRBinaryTcp => PlcProtocol.McRBinaryTcp,
-                _ => throw new ArgumentOutOfRangeException(nameof(configuration.Protocol))
-            };
+                case MelsecProtocol.McBinaryTcp:
+                    protocol = PlcProtocol.McBinaryTcp;
+                    break;
+                case MelsecProtocol.McAsciiTcp:
+                    protocol = PlcProtocol.McAsciiTcp;
+                    break;
+                case MelsecProtocol.McBinaryUdp:
+                    protocol = PlcProtocol.McBinaryUdp;
+                    break;
+                case MelsecProtocol.McAsciiUdp:
+                    protocol = PlcProtocol.McAsciiUdp;
+                    break;
+                case MelsecProtocol.A1eBinaryTcp:
+                    protocol = PlcProtocol.A1eBinaryTcp;
+                    break;
+                case MelsecProtocol.A1eAsciiTcp:
+                    protocol = PlcProtocol.A1eAsciiTcp;
+                    break;
+                case MelsecProtocol.McRBinaryTcp:
+                    protocol = PlcProtocol.McRBinaryTcp;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(configuration.Protocol));
+            }
+
             PlcOptions options = configuration.NativeOptions(protocol);
             options.MelsecNetwork = configuration.Network;
             options.MelsecPc = configuration.Pc;

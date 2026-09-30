@@ -36,7 +36,7 @@ function selectDevice(id: string) {
     <NInput v-model:value="query" size="small" clearable placeholder="搜索品牌 / 系列" :input-props="{ 'aria-label': '搜索设备品牌或系列' }">
       <template #prefix><NIcon :component="SearchOutline" :size="15" /></template>
     </NInput>
-    <p class="device-navigation-hint">{{ locked ? '会话已锁定，请先断开连接再切换。' : '先选品牌，再选系列或通讯类型。' }}</p>
+    <p class="device-navigation-hint">{{ locked ? '会话已锁定，请先断开连接再切换。' : '先选分组，再选设备或通讯类型。' }}</p>
     <nav class="device-group-list" aria-label="PLC 品牌与系列">
       <section v-for="group in visibleGroups" :key="group.id" class="device-group">
         <button type="button" class="device-group-toggle" :aria-expanded="isExpanded(group.id)" :aria-controls="`device-group-${group.id}`" :aria-label="`${group.label}，${group.devices.length} 个分类`" :title="group.description" @click="toggleGroup(group.id)">

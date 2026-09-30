@@ -1,5 +1,5 @@
 import type { ConnectRequest, ConnectionStatus, CpuModel, InovanceSeries, PlcProtocol } from './types'
-import { isInovanceProtocol, isModbusProtocol, isOmronProtocol, isSerialProtocol } from './types.ts'
+import { defaultCipOptions, isCipProtocol, isInovanceProtocol, isModbusProtocol, isOmronProtocol, isSerialProtocol } from './types.ts'
 
 export interface DeviceProfile {
   id: string
@@ -62,6 +62,14 @@ export const deviceGroups: DeviceGroup[] = [
       { id: 'inovance-easy', label: 'Easy', protocols: ['inovance_modbus_tcp'], inovanceSeries: ['Easy'] },
     ],
   },
+  {
+    id: 'cip', label: 'EtherNetIP', description: 'EtherNet/IP · 标签读写',
+    devices: [
+      { id: 'omron-cip', label: '欧姆龙', protocols: ['omron_cip'] },
+      { id: 'melsec-cip', label: '三菱', protocols: ['melsec_cip'] },
+      { id: 'inovance-cip', label: '汇川', protocols: ['inovance_cip'] },
+    ],
+  },
 ]
 
 export function getDeviceProfile(id: string): DeviceProfile {
@@ -94,13 +102,14 @@ export function createDeviceConnection(id: string): ConnectRequest {
   const profile = getDeviceProfile(id)
   const protocol = profile.protocols[0]
   return {
-    protocol, host: '127.0.0.1', port: protocol === 's7' ? 102 : isModbusProtocol(protocol) || isInovanceProtocol(protocol) ? 502 : isOmronProtocol(protocol) ? 9600 : 6000,
+    protocol, host: '127.0.0.1', port: isCipProtocol(protocol) ? 44818 : protocol === 's7' ? 102 : isModbusProtocol(protocol) || isInovanceProtocol(protocol) ? 502 : isOmronProtocol(protocol) ? 9600 : 6000,
     cpu: profile.cpu ?? 'S1200', rack: 0, slot: protocol === 's7' ? 1 : 0,
     connectTimeoutMs: 5000, receiveTimeoutMs: isSerialProtocol(protocol) ? 1000 : 5000,
     localTsap: '', remoteTsap: '',
     melsec: { networkNumber: 0, pcNumber: 255, ioNumber: 1023, stationNumber: 0, monitoringTimer: 16 },
     modbus: { unitId: 1, byteOrder: 'ABCD' },
     inovance: { series: profile.inovanceSeries?.[0] ?? 'AM', unitId: 1, byteOrder: 'CDAB' },
+    cip: defaultCipOptions(protocol),
     omron: { sourceNode: 0, destinationNode: 0, sourceNetwork: 0, destinationNetwork: 0, sourceUnit: 0, destinationUnit: 0, gatewayCount: 2, byteOrder: 'CDAB' },
     serial: { path: 'COM1', baudRate: 9600, dataBits: protocol === 'modbus_ascii' ? 7 : 8, parity: 'even', stopBits: 1 },
   }

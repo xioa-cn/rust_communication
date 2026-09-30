@@ -25,6 +25,7 @@ fn config(protocol: PlcProtocol) -> ConnectRequest {
         modbus: Default::default(),
         omron: Default::default(),
         inovance: Default::default(),
+        cip: Default::default(),
         serial: Default::default(),
     }
 }

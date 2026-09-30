@@ -2,7 +2,7 @@
 import {computed, nextTick, onBeforeUnmount, reactive, ref, watch} from 'vue'
 import {NButton, NIcon} from 'naive-ui'
 import {ConstructOutline, PauseOutline} from '@vicons/ionicons5'
-import {availableDataTypes, defaultAddress, isModbusProtocol, protocolLabels} from '../types'
+import {availableDataTypes, defaultAddress, isCipProtocol, isModbusProtocol, protocolLabels} from '../types'
 import {createDeviceConnection} from '../deviceCatalog'
 import type {ConnectRequest, PlcProtocol, ReadRequest, ReadResponse, WriteRequest, WriteResponse} from '../types'
 import {
@@ -199,7 +199,7 @@ async function importPoints(event: Event) {
 }
 
 const rustConfig = computed(() => props.connectionConfig ?? {
-  ...createDeviceConnection(props.protocol === 's7' ? 's7-1200' : props.protocol === 'inovance_modbus_tcp' ? 'inovance-am' : props.protocol.startsWith('omron_') ? 'omron-fins-tcp' : props.protocol.startsWith('modbus_') ? 'modbus-tcp' : 'melsec-mc'),
+  ...createDeviceConnection(isCipProtocol(props.protocol) ? props.protocol.replace('_', '-') : props.protocol === 's7' ? 's7-1200' : props.protocol === 'inovance_modbus_tcp' ? 'inovance-am' : props.protocol.startsWith('omron_') ? 'omron-fins-tcp' : props.protocol.startsWith('modbus_') ? 'modbus-tcp' : 'melsec-mc'),
   protocol: props.protocol
 })
 const rustExample = computed(() => generateRustExample(rustConfig.value, props.exampleOperation))

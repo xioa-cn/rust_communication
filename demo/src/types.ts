@@ -14,6 +14,9 @@ export type PlcProtocol =
     | 'omron_fins_tcp'
     | 'omron_fins_udp'
     | 'inovance_modbus_tcp'
+    | 'omron_cip'
+    | 'melsec_cip'
+    | 'inovance_cip'
 export type InovanceSeries = 'AM' | 'AC' | 'AP' | 'EVO' | 'H3U' | 'H5U' | 'Easy'
 export interface InovanceOptions {
     series: InovanceSeries;
@@ -70,6 +73,19 @@ export interface SerialOptions {
     stopBits: 1 | 2
 }
 
+export interface CipOptions {
+    connected: boolean
+    connectionSize: number
+    route: number[]
+    packetIntervalUs: number
+    timeoutMultiplier: number
+}
+
+export function defaultCipOptions(protocol: PlcProtocol): CipOptions {
+    const connected = protocol === 'inovance_cip'
+    return { connected, connectionSize: connected ? 1996 : 500, route: [], packetIntervalUs: 2_000_000, timeoutMultiplier: 2 }
+}
+
 export interface ConnectRequest {
     protocol: PlcProtocol
     host: string
@@ -85,6 +101,7 @@ export interface ConnectRequest {
     modbus: ModbusOptions
     omron: OmronOptions
     inovance: InovanceOptions
+    cip: CipOptions
     serial: SerialOptions
 }
 
@@ -160,6 +177,9 @@ export const protocolLabels: Record<PlcProtocol, string> = {
     omron_fins_tcp: 'FINS / TCP',
     omron_fins_udp: 'FINS / UDP',
     inovance_modbus_tcp: '汇川 Modbus / TCP',
+    omron_cip: '欧姆龙 EtherNetIP',
+    melsec_cip: '三菱 EtherNetIP',
+    inovance_cip: '汇川 EtherNetIP',
 }
 
 export function isModbusProtocol(protocol: PlcProtocol): boolean {
@@ -176,13 +196,18 @@ export function isOmronProtocol(protocol: PlcProtocol): boolean {
 
 export function availableDataTypes(protocol: PlcProtocol) {
     return dataTypes.filter(option => {
+        if (isCipProtocol(protocol)) return option.value !== 's7_string' && (option.value !== 'raw_string' || protocol === 'omron_cip')
         if (isModbusProtocol(protocol)) return !['u8', 'i8', 's7_string'].includes(option.value)
         return protocol === 's7' || option.value !== 's7_string'
-    })
+    }).map(option => protocol === 'omron_cip' && option.value === 'raw_string' ? { ...option, label: 'String · Omron STRING（读取）' } : option)
 }
 
 export function isInovanceProtocol(protocol: PlcProtocol): boolean {
     return protocol === 'inovance_modbus_tcp'
+}
+
+export function isCipProtocol(protocol: PlcProtocol): boolean {
+    return ['omron_cip', 'melsec_cip', 'inovance_cip'].includes(protocol)
 }
 
 export function isInovanceIecSeries(series: InovanceSeries): boolean {
@@ -190,6 +215,7 @@ export function isInovanceIecSeries(series: InovanceSeries): boolean {
 }
 
 export function defaultAddress(protocol: PlcProtocol, type: DataType, series: InovanceSeries = 'AM'): string {
+    if (isCipProtocol(protocol)) return type === 'bool' ? 'Flag' : type === 'raw_string' ? 'Text' : 'Values[0]'
     if (isInovanceProtocol(protocol)) return isInovanceIecSeries(series)
         ? type === 'bool' ? 'MX100.0' : 'MW100'
         : type === 'bool' ? 'M100' : 'D100'

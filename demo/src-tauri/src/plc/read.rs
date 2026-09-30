@@ -24,6 +24,9 @@ fn read_values<T: S7ReadValue + MelsecReadValue + OmronReadValue + InovanceReadV
 /// S7 STRING 由库自动解析长度头；原始文本才需要指定 UTF-8 字节数。
 pub fn read(client: &mut PlcClient, request: &ReadRequest) -> Result<Box<[String]>, String> {
     validate_address(&request.address)?;
+    if let PlcClient::Cip(inner) = client {
+        return super::cip::read(inner, request);
+    }
     let address = request.address.trim();
     if client.protocol().is_modbus() {
         return read_modbus(client, request);

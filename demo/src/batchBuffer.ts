@@ -22,7 +22,7 @@ export function batchBytes(request: ReadRequest, values: string[]): Uint8Array {
   return Uint8Array.from(values, Number)
 }
 
-export function formatBatch(bytes: Uint8Array, format: BatchFormat, reverse: boolean, perLine: number): string {
+export function formatBatch(bytes: Uint8Array, format: BatchFormat, reverse: boolean, perLine: number, littleEndian = false): string {
   if (!Number.isInteger(perLine) || perLine < 1 || perLine > 64) throw new Error('每行数量必须为 1–64。')
   const buffer = reverse ? reversePairs(bytes) : bytes
   if (['ascii', 'utf-8', 'utf-16le', 'utf-16be'].includes(format)) return decodeText(buffer, format as TextEncoding)
@@ -31,9 +31,9 @@ export function formatBatch(bytes: Uint8Array, format: BatchFormat, reverse: boo
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength), values: string[] = []
   for (let offset = 0; offset < buffer.length; offset += width) {
     const value = format === 'hex' ? buffer[offset].toString(16).padStart(2, '0').toUpperCase()
-      : format === 'u16' ? view.getUint16(offset) : format === 'i16' ? view.getInt16(offset)
-      : format === 'u32' ? view.getUint32(offset) : format === 'i32' ? view.getInt32(offset)
-      : format === 'f32' ? view.getFloat32(offset) : view.getFloat64(offset)
+      : format === 'u16' ? view.getUint16(offset, littleEndian) : format === 'i16' ? view.getInt16(offset, littleEndian)
+      : format === 'u32' ? view.getUint32(offset, littleEndian) : format === 'i32' ? view.getInt32(offset, littleEndian)
+      : format === 'f32' ? view.getFloat32(offset, littleEndian) : view.getFloat64(offset, littleEndian)
     values.push(String(value))
   }
   const lines: string[] = []

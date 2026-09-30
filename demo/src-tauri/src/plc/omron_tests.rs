@@ -25,6 +25,7 @@ fn config(protocol: PlcProtocol) -> ConnectRequest {
         melsec: Default::default(),
         modbus: Default::default(),
         inovance: Default::default(),
+        cip: Default::default(),
         omron: OmronOptions {
             source_node: 20,
             destination_node: 10,

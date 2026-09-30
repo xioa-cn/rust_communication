@@ -10,7 +10,8 @@ namespace RsCommunication
         S7 = 1, McBinaryTcp = 2, McAsciiTcp = 3, McBinaryUdp = 4, McAsciiUdp = 5,
         A1eBinaryTcp = 6, A1eAsciiTcp = 7, McRBinaryTcp = 8,
         FinsTcp = 9, FinsUdp = 10, ModbusTcp = 11, ModbusUdp = 12,
-        ModbusRtu = 13, ModbusAscii = 14, InovanceModbusTcp = 15
+        ModbusRtu = 13, ModbusAscii = 14, InovanceModbusTcp = 15,
+        OmronCip = 16, MelsecCip = 17, InovanceCip = 18
     }
 
     internal enum PlcDataType : uint

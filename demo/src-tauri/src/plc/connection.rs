@@ -5,6 +5,7 @@ use crate::models::{
     ConnectRequest, CpuModel, ModbusByteOrder, ModbusOptions, OmronOptions, PlcProtocol,
 };
 use rs_appliaction::communication::{
+    ethernet::{CipClient, CipOptions, CipVendor},
     inovace::InovanceModbusTcp,
     melsec::*,
     modbus::{ByteOrder, ModbusClient, ModbusTcp, ModbusTransport, ModbusUdp},
@@ -46,6 +47,37 @@ pub fn create_client(request: ConnectRequest) -> Result<PlcClient, String> {
         || !(1..=60_000).contains(&request.receive_timeout_ms)
     {
         return Err("超时必须在 1..60000 毫秒之间".into());
+    }
+    if request.protocol.is_cip() {
+        let vendor = match request.protocol {
+            PlcProtocol::OmronCip => CipVendor::Omron,
+            PlcProtocol::MelsecCip => CipVendor::Melsec,
+            _ => CipVendor::Inovance,
+        };
+        let mut client = CipClient::new(
+            address,
+            request.port,
+            vendor,
+            Timeout::new(request.connect_timeout_ms, request.receive_timeout_ms),
+        );
+        let connected = request
+            .cip
+            .connected
+            .unwrap_or(vendor == CipVendor::Inovance);
+        let options = CipOptions {
+            connected,
+            connection_size: request.cip.connection_size.unwrap_or(if connected {
+                1996
+            } else {
+                500
+            }),
+            route: request.cip.route,
+            packet_interval_us: request.cip.packet_interval_us,
+            timeout_multiplier: request.cip.timeout_multiplier,
+            ..CipOptions::default()
+        };
+        super::result(client.set_options(options))?;
+        return Ok(PlcClient::Cip(client));
     }
     if request.protocol == PlcProtocol::InovanceModbusTcp {
         let options = request.inovance;
@@ -272,6 +304,7 @@ mod tests {
             modbus: Default::default(),
             omron: Default::default(),
             inovance: Default::default(),
+            cip: Default::default(),
             serial: Default::default(),
             host: "127.0.0.1".into(),
             port: 102,

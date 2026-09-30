@@ -5,3 +5,4 @@ pub mod timeout;
 pub mod modbus;
 pub mod omron;
 pub mod inovace;
+pub mod ethernet;

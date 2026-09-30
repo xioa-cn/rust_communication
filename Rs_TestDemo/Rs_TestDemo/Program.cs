@@ -3,6 +3,21 @@ using RsCommunication;
 
 Console.WriteLine("Hello, World!");
 
+OmronCip omronCip = new OmronCip("127.0.0.1");
+
+var cipConnectResult = omronCip.Connect();
+
+Console.WriteLine(cipConnectResult.IsSuccess ? "Connect Success" : "Connect Fail");
+
+var read = omronCip.Read<short>("A");
+
+Console.WriteLine(read.IsSuccess ? "Read Success" : "Read Fail");
+
+Console.WriteLine(read.Content);
+
+
+return;
+
 ModbusOptions modbusOptions = new ModbusOptions();
 
 modbusOptions.ByteOrder = PlcByteOrder.CDAB;
@@ -41,10 +56,11 @@ foreach (var item in Enumerable.Range(0, 30000))
         Console.WriteLine("写入失败！");
     }
 }
+
 sp.Stop();
 Console.WriteLine("single sp milliseconds:" + sp.ElapsedMilliseconds);
 
-foreach (var ran in Enumerable.Range(0,5))
+foreach (var ran in Enumerable.Range(0, 5))
 {
     task.Add(Task.Run(() =>
     {
@@ -66,6 +82,7 @@ foreach (var ran in Enumerable.Range(0,5))
                 Console.WriteLine("写入失败！");
             }
         }
+
         sp.Stop();
         Thread.Sleep(1);
         Console.WriteLine("task sp milliseconds:" + sp.ElapsedMilliseconds);

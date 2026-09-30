@@ -1,4 +1,5 @@
 import type {ConnectRequest, ReadRequest, WriteRequest} from './types'
+import { isCipProtocol } from './types.ts'
 import type {TextEncoding} from './workbench'
 
 export type RustOperation =
@@ -50,6 +51,15 @@ function createPlc(config: ConnectRequest) {
             statements.push(`let mut plc = S7Net::new(address, ${config.port}, S7Type::${config.cpu}, timeout, ${config.rack}, ${config.slot});`)
             const local = config.localTsap?.trim(), remote = config.remoteTsap?.trim()
             if (local && remote) statements.push(`plc = plc.with_tsap(u16::from_str_radix(${rustString(local.replace(/^0x/i, ''))}, 16)?, u16::from_str_radix(${rustString(remote.replace(/^0x/i, ''))}, 16)?);`)
+        } else if (isCipProtocol(config.protocol)) {
+            const client = config.protocol === 'omron_cip' ? 'OmronCip' : config.protocol === 'melsec_cip' ? 'MelsecCip' : 'InovanceCip'
+            imports.unshift(`use rs_appliaction::communication::ethernet::{${client}, CipOptions};`)
+            statements.push(`let mut plc = ${client}::new(address, ${config.port}, timeout);`,
+                'plc.set_options(CipOptions {',
+                `    connected: ${config.cip.connected}, connection_size: ${config.cip.connectionSize},`,
+                `    route: vec![${config.cip.route.join(', ')}],`,
+                `    packet_interval_us: ${config.cip.packetIntervalUs}, timeout_multiplier: ${config.cip.timeoutMultiplier},`,
+                '    ..CipOptions::default()', '}).to_result()?;')
         } else if (config.protocol === 'inovance_modbus_tcp') {
             imports.unshift('use rs_appliaction::communication::inovace::{InovanceModbusTcp, InovanceType, ByteOrder};')
             statements.push(`let mut plc = InovanceModbusTcp::new(address, ${config.port}, InovanceType::${config.inovance.series}, timeout);`,
@@ -94,12 +104,14 @@ function decodeBytes(text: { encoding: TextEncoding; reverse: boolean }): string
     return lines
 }
 
-function operationCode(operation: RustOperation): string[] {
+function operationCode(operation: RustOperation, config: ConnectRequest): string[] {
     if (operation.kind === 'connect') return ['plc.connect().to_result()?;', 'println!("PLC 连接成功（UDP 仅表示本地通道已就绪）");']
     const request = operation.request, address = rustString(request.address.trim())
     const type = ['raw_string', 's7_string'].includes(request.dataType) ? 'String' : request.dataType
     if (operation.kind === 'read') {
-        const call = request.dataType === 's7_string' ? `plc.read_s7_strings(${address})` : `plc.read::<${type}>(${address}, ${operation.request.length ?? 1})`
+        const call = isCipProtocol(config.protocol) && request.dataType === 'raw_string'
+            ? `plc.read_strings(${address}, ${operation.request.length ?? 1})`
+            : request.dataType === 's7_string' ? `plc.read_s7_strings(${address})` : `plc.read::<${type}>(${address}, ${operation.request.length ?? 1})`
         if (operation.text && request.dataType === 'u8') return [`let values = ${call}.to_result()?;`, ...decodeBytes(operation.text)]
         return [`match ${call}.to_result() {`, `    Ok(values) => println!("读取 {} 成功: {:?}", ${address}, values),`, `    Err(error) => eprintln!("读取 {} 失败: {}", ${address}, error),`, '}']
     }
@@ -112,7 +124,7 @@ function operationCode(operation: RustOperation): string[] {
 }
 
 export function generateRustExample(config: ConnectRequest, operation: RustOperation = {kind: 'connect'}) {
-    const creation = createPlc(config), operationLines = operationCode(operation)
+    const creation = createPlc(config), operationLines = operationCode(operation, config)
     const body = [...creation.statements, '', ...(operation.kind === 'connect' ? [] : ['plc.connect().to_result()?;', '']), ...operationLines, '', 'plc.disconnect().to_result()?;', 'Ok(())']
     return {
         creation: [...creation.imports, '', ...creation.statements].join('\n'),

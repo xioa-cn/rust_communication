@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
 import { ArrowDownOutline, ArrowUpOutline, PauseOutline, PulseOutline } from '@vicons/ionicons5'
-import { availableDataTypes, defaultAddress, isModbusProtocol, isReadOnlyAddress } from '../types'
+import { availableDataTypes, defaultAddress, isCipProtocol, isModbusProtocol, isReadOnlyAddress } from '../types'
 import type { DataType, InovanceSeries, PlcProtocol, ReadRequest, ReadResponse, WriteRequest, WriteResponse } from '../types'
 import { createSerialRunner, decodeText, displayValue, encodeText, parseHex, parseValues, quickTypes, reversePairs } from '../workbench'
 import type { NumberDisplay, TextEncoding } from '../workbench'
@@ -19,11 +19,12 @@ const timings = reactive({ read: [] as number[], write: [] as number[] })
 const counts = reactive({ read: 0, write: 0, changes: 0 })
 const runner = createSerialRunner(value => { running.value = value; emit('running', value); if (!value) { taskName.value = ''; confirmed.value = false } })
 const modbus = computed(() => isModbusProtocol(props.protocol))
+const cip = computed(() => isCipProtocol(props.protocol))
 const available = computed(() => availableDataTypes(props.protocol).map(option => option.value))
 const editable = computed(() => !props.busy && !props.locked)
 const ready = computed(() => props.desktop && props.connected && editable.value)
 const resultLines = computed(() => values.value.map((value, index) => ({ index, text: displayValue(value, display.value) })).filter(row => !filter.value || row.text.toLowerCase().includes(filter.value.toLowerCase())))
-const encodings = computed(() => modbus.value ? ['utf-8', 'ascii'] : ['utf-8', 'ascii', 'utf-16le', 'utf-16be'])
+const encodings = computed(() => cip.value ? ['utf-8'] : modbus.value ? ['utf-8', 'ascii'] : ['utf-8', 'ascii', 'utf-16le', 'utf-16be'])
 const polyline = computed(() => {
   const points = trend.value, minimum = Math.min(...points), span = Math.max(...points) - minimum || 1
   return points.map((value, index) => `${index * 600 / Math.max(points.length - 1, 1)},${90 - (value - minimum) / span * 70}`).join(' ')
@@ -48,18 +49,18 @@ function checkAddress(address: string) {
 function readRequest(): ReadRequest {
   checkAddress(readForm.address)
   if (!Number.isInteger(readForm.length) || readForm.length < 1 || readForm.length > 1024) throw new Error('读取数量必须为 1–1024。')
-  return { address: readForm.address.trim(), dataType: readForm.type === 'raw_string' && !modbus.value ? 'u8' : readForm.type, ...(readForm.type === 's7_string' ? {} : { length: readForm.length }) }
+  return { address: readForm.address.trim(), dataType: readForm.type === 'raw_string' && !modbus.value && !cip.value ? 'u8' : readForm.type, ...(readForm.type === 's7_string' ? {} : { length: readForm.length }) }
 }
 async function readOnce(request: ReadRequest, options = { ...readForm }): Promise<boolean> {
-  emit('example', { kind: 'read', request, ...(options.type === 'raw_string' && !modbus.value ? { text: { encoding: options.encoding, reverse: options.reverse } } : {}) }, false)
+  emit('example', { kind: 'read', request, ...(options.type === 'raw_string' && !modbus.value && !cip.value ? { text: { encoding: options.encoding, reverse: options.reverse } } : {}) }, false)
   const response = await props.read(request)
   if (!response) return false
   let next = response.values
   if (options.type === 'raw_string') {
-    if (!modbus.value) {
+    if (!modbus.value && !cip.value) {
       const bytes = Uint8Array.from(response.values.map(Number))
       next = [decodeText(options.reverse ? reversePairs(bytes) : bytes, options.encoding)]
-    } else if (options.encoding === 'ascii') encodeText(next.join(''), 'ascii')
+    } else if (!cip.value && options.encoding === 'ascii') encodeText(next.join(''), 'ascii')
   }
   record('read', response.elapsedMs)
   lastReadContext.value = { address: request.address, type: options.type, time: new Date().toLocaleTimeString('zh-CN', { hour12: false }) }
@@ -75,6 +76,7 @@ function writeRequest(index = 0): WriteRequest {
   checkAddress(writeForm.address)
   if (isReadOnlyAddress(props.protocol, writeForm.address)) throw new Error('该输入地址为只读区域，不能写入。')
   let type = writeForm.type, text = writeForm.text
+  if (cip.value && type === 'raw_string') throw new Error('CIP STRING 当前仅支持读取，尚不支持写入。')
   if (writeForm.increment) {
     if (!Number.isSafeInteger(writeForm.start) || !Number.isSafeInteger(writeForm.end) || writeForm.end < writeForm.start || !/^[uif]\d+$/.test(type)) throw new Error('自增写入需要数值类型，起止值为安全整数且终值不小于起值。')
     text = String(writeForm.start + index % (writeForm.end - writeForm.start + 1))
@@ -133,14 +135,16 @@ defineExpose({ stop: () => runner.stop() })
 <template>
   <section class="io-workspace" aria-label="单数据读写测试">
     <div v-if="message" class="studio-alert" role="alert">{{ message }}</div>
+    <p v-if="isCipProtocol(protocol)" class="studio-hint">EtherNetIP 读写类型必须与标签定义一致：REAL（0x00CA）选 Float / f32，LREAL（0x00CB）选 Double / f64，INT 选 Short / i16，DINT 选 Int / i32。数量按元素计算，不会把浮点数据强行当整数解析。</p>
+    <p v-if="protocol === 'omron_cip'" class="studio-hint">Omron STRING（0x00D0）请选择 String；数量是字符串个数，不是字节数。数组从指定下标逐项读取，保留空字符串和 UTF-8 中文；当前仅支持字符串读取，不支持写入。</p>
     <div v-if="running" class="task-banner" role="status"><span class="status-dot online"></span>{{ taskName }}正在运行 · 本页累计 {{ taskName === '定时读取' ? counts.read : counts.write }} 次 <NButton size="small" type="warning" @click="runner.stop()"><template #icon><NIcon :component="PauseOutline" /></template>停止任务</NButton></div>
     <div class="io-columns">
       <section class="panel io-card read-card" aria-labelledby="read-title">
         <div class="studio-card-heading"><span class="studio-icon"><NIcon :component="ArrowDownOutline" :size="20" /></span><div><h2 id="read-title">数据读取</h2><p>READ · 数值、文本与实时观察</p></div><span class="studio-badge">{{ counts.read }} 次</span></div>
         <fieldset :disabled="!editable" class="studio-fieldset">
-          <div class="studio-fields address-fields"><label>设备地址<input v-model="readForm.address" aria-label="读取地址" :placeholder="defaultAddress(protocol, readForm.type, inovanceSeries)" /></label><label>数量 / 字节<input v-model.number="readForm.length" type="number" min="1" max="1024" :disabled="readForm.type === 's7_string'" /></label><label class="compact-type-control">类型<select :value="readForm.type" aria-label="读取类型" @change="selectType('read', ($event.target as HTMLSelectElement).value as DataType)"><option v-for="type in quickTypes.filter(type => available.includes(type.value))" :key="type.value" :value="type.value">{{ type.label }}</option></select></label></div>
+          <div class="studio-fields address-fields"><label>设备地址<input v-model="readForm.address" aria-label="读取地址" :placeholder="defaultAddress(protocol, readForm.type, inovanceSeries)" /></label><label>{{ cip ? '数量 / 元素' : '数量 / 字节' }}<input v-model.number="readForm.length" type="number" min="1" max="1024" :disabled="readForm.type === 's7_string'" /></label><label class="compact-type-control">类型<select :value="readForm.type" aria-label="读取类型" @change="selectType('read', ($event.target as HTMLSelectElement).value as DataType)"><option v-for="type in quickTypes.filter(type => available.includes(type.value))" :key="type.value" :value="type.value">{{ type.label }}</option></select></label></div>
           <div class="type-chips" aria-label="读取数据类型"><button v-for="type in quickTypes" :key="type.value" type="button" :class="{ selected: readForm.type === type.value }" :disabled="!available.includes(type.value)" :title="available.includes(type.value) ? type.value : '当前协议不支持'" :aria-pressed="readForm.type === type.value" @click="selectType('read', type.value)">{{ type.label }}</button></div>
-          <div v-if="readForm.type === 'raw_string'" class="studio-fields"><label>文本编码<select v-model="readForm.encoding"><option v-for="encoding in encodings" :key="encoding">{{ encoding }}</option></select></label><label class="check-label"><input v-model="readForm.reverse" type="checkbox" :disabled="modbus" />字节对交换</label></div>
+          <div v-if="readForm.type === 'raw_string' && !cip" class="studio-fields"><label>文本编码<select v-model="readForm.encoding"><option v-for="encoding in encodings" :key="encoding">{{ encoding }}</option></select></label><label class="check-label"><input v-model="readForm.reverse" type="checkbox" :disabled="modbus" />字节对交换</label></div>
         </fieldset>
         <div class="result-toolbar"><div class="segmented-control" aria-label="结果进制"><button v-for="mode in (['dec', 'hex', 'bin'] as const)" :key="mode" :class="{ selected: display === mode }" :aria-pressed="display === mode" @click="display = mode">{{ mode === 'dec' ? 'Dec' : mode === 'hex' ? 'Hex' : 'Bit' }}</button></div><label class="result-search"><input v-model="filter" placeholder="搜索结果…" aria-label="搜索读取结果" /></label><button class="text-action" :aria-pressed="curve" @click="curve = !curve"><NIcon :component="PulseOutline" />曲线</button></div>
         <div class="read-output" role="log" aria-label="读取结果"><div v-if="!values.length" class="studio-empty"><span>等待第一组设备数据</span><small>选择类型后读取；不会显示模拟结果。</small></div><div v-for="row in resultLines" :key="row.index" class="value-row"><span>{{ String(row.index).padStart(3, '0') }}</span><code>{{ row.text }}</code></div><p v-if="values.length && !resultLines.length" class="studio-empty">没有匹配结果</p></div>
@@ -156,7 +160,7 @@ defineExpose({ stop: () => runner.stop() })
         <fieldset :disabled="!editable" class="studio-fieldset">
           <div class="studio-fields address-fields"><label>设备地址<input v-model="writeForm.address" aria-label="写入地址" :placeholder="defaultAddress(protocol, writeForm.type, inovanceSeries)" /></label><label>输入格式<select v-model="writeForm.mode"><option value="values">数值 / 文本</option><option value="hex" :disabled="modbus">HEX 字节</option></select></label><label class="compact-type-control">类型<select :value="writeForm.type" aria-label="写入类型" :disabled="writeForm.mode === 'hex'" @change="selectType('write', ($event.target as HTMLSelectElement).value as DataType)"><option v-for="type in quickTypes.filter(type => available.includes(type.value))" :key="type.value" :value="type.value">{{ type.label }}</option></select></label></div>
           <div class="type-chips" aria-label="写入数据类型"><button v-for="type in quickTypes" :key="type.value" type="button" :class="{ selected: writeForm.type === type.value }" :disabled="!available.includes(type.value) || writeForm.mode === 'hex'" :aria-pressed="writeForm.type === type.value" @click="selectType('write', type.value)">{{ type.label }}</button></div>
-          <div v-if="writeForm.type === 'raw_string'" class="studio-fields"><label>文本编码<select v-model="writeForm.encoding"><option v-for="encoding in encodings" :key="encoding">{{ encoding }}</option></select></label><label class="check-label"><input v-model="writeForm.reverse" type="checkbox" :disabled="modbus" />字节对交换</label></div>
+          <div v-if="writeForm.type === 'raw_string' && !cip" class="studio-fields"><label>文本编码<select v-model="writeForm.encoding"><option v-for="encoding in encodings" :key="encoding">{{ encoding }}</option></select></label><label class="check-label"><input v-model="writeForm.reverse" type="checkbox" :disabled="modbus" />字节对交换</label></div>
           <label class="studio-label write-value-label">写入值<textarea v-model="writeForm.text" aria-label="写入值" rows="5" :placeholder="writeForm.mode === 'hex' ? '01 02 0A FF' : '单值：100 / true\n数组：[1,2,3] · 连续：[1:100] · 重复：[1*100]\n字符串按原文写入'" :disabled="writeForm.increment" spellcheck="false"></textarea></label>
           <div class="dynamic-input"><label class="check-label"><input v-model="writeForm.increment" type="checkbox" :disabled="writeForm.mode === 'hex'" />逐次自增</label><input v-model.number="writeForm.start" type="number" :disabled="!writeForm.increment" aria-label="自增起值" /><span>→</span><input v-model.number="writeForm.end" type="number" :disabled="!writeForm.increment" aria-label="自增终值" /><small>到终值后循环</small></div>
         </fieldset>

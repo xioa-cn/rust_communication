@@ -3,6 +3,7 @@ use super::serial::SerialSession;
 use crate::models::PlcProtocol;
 use rs_appliaction::{
     communication::{
+        ethernet::{CipClient, CipVendor},
         inovace::{InovanceModbusTcp, InovanceReadValue, InovanceValue},
         melsec::*,
         modbus::{ModbusTcp, ModbusUdp, ModbusValue},
@@ -17,6 +18,7 @@ use rs_appliaction::{
 
 /// 会话只能持有一种协议；Mutex 仍覆盖一次完整的读写操作。
 pub enum PlcClient {
+    Cip(CipClient),
     S7(S7Net),
     McBinary(MelsecMcNet),
     McAscii(MelsecMcAsciiNet),
@@ -38,6 +40,7 @@ impl PlcClient {
     /// 仅手动连接，不轮询或探测任意 PLC 地址。
     pub fn connect(&mut self) -> Operator<bool> {
         match self {
+            Self::Cip(client) => client.connect(),
             Self::S7(client) => client.connect(),
             Self::McBinary(client) => client.connect(),
             Self::McAscii(client) => client.connect(),
@@ -57,6 +60,7 @@ impl PlcClient {
     /// 释放实际协议的本地 Socket。
     pub fn disconnect(&mut self) -> Operator<bool> {
         match self {
+            Self::Cip(client) => client.disconnect(),
             Self::S7(client) => client.disconnect(),
             Self::McBinary(client) => client.disconnect(),
             Self::McAscii(client) => client.disconnect(),
@@ -76,6 +80,7 @@ impl PlcClient {
     /// UDP 只代表本地 Socket 已就绪，不代表远端 PLC 在线。
     pub fn is_connected(&self) -> bool {
         match self {
+            Self::Cip(client) => client.is_connected(),
             Self::S7(client) => client.is_connected(),
             Self::McBinary(client) => client.is_connected(),
             Self::McAscii(client) => client.is_connected(),
@@ -95,6 +100,11 @@ impl PlcClient {
     /// 返回实际会话协议，不使用前端表单推测后端状态。
     pub fn protocol(&self) -> PlcProtocol {
         match self {
+            Self::Cip(client) => match client.vendor() {
+                CipVendor::Omron => PlcProtocol::OmronCip,
+                CipVendor::Melsec => PlcProtocol::MelsecCip,
+                CipVendor::Inovance => PlcProtocol::InovanceCip,
+            },
             Self::S7(_) => PlcProtocol::S7,
             Self::McBinary(_) => PlcProtocol::McBinary,
             Self::McAscii(_) => PlcProtocol::McAscii,

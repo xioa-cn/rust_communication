@@ -1,4 +1,5 @@
 mod client;
+mod cip;
 mod connection;
 mod read;
 mod response;

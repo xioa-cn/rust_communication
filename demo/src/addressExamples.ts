@@ -1,10 +1,19 @@
 import type { InovanceSeries, PlcProtocol } from './types.ts'
-import { isInovanceIecSeries, isInovanceProtocol } from './types.ts'
+import { isCipProtocol, isInovanceIecSeries, isInovanceProtocol } from './types.ts'
 
 export interface AddressExample { address: string; description: string; bit: boolean; word: boolean; note: string }
 const entry = (address: string, description: string, bit: boolean, word: boolean, note: string): AddressExample => ({ address, description, bit, word, note })
 
 export function addressExamples(protocol: PlcProtocol, series: InovanceSeries = 'AM'): AddressExample[] {
+  if (isCipProtocol(protocol)) return [
+    ...(protocol === 'omron_cip' ? [entry('Text', '[String] Omron STRING 标签', false, true, '选择 String，数量 1；解析 UTF-8 长度头，不是 BYTE 数组。当前仅支持读取。'), entry('Texts[0]', '[String] 字符串数组', false, true, '选择 String，数量为字符串个数；从指定下标逐项读取，保留空字符串和中文。')] : []),
+    entry('Flag', '[Bool] 字节型 BOOL 标签', true, false, 'PLC 工程中的符号名；写入 true/false，不支持整数打包的 BOOL 数组。'),
+    entry('Values[0]', '[原子类型] 数组', false, true, '长度按元素；类型必须与 PLC 标签定义完全一致。'),
+    entry('Bytes[0]', '[Byte] USINT/BYTE 数组', false, true, '批量字节读写仅适用于字节型数组，不是任意标签的内存映射。'),
+    entry('Program:Main.Tag', '[原子类型] 程序标签', true, true, '使用目标 PLC 工程实际定义的标签路径。'),
+    entry('Matrix[1,256].Value', '[原子类型] 数组与成员', true, true, '最终成员必须是支持的原子类型，不读取整个 UDT。'),
+    entry('type=0xD2;Words[0]', '[Word] 显式 WORD 类型', false, true, '使用 u16；默认 u16 写 UINT/C7，WORD/D2 必须显式指定。'),
+  ]
   if (isInovanceProtocol(protocol)) {
     if (isInovanceIecSeries(series)) {
       const rows = [
@@ -94,6 +103,8 @@ export function addressExamples(protocol: PlcProtocol, series: InovanceSeries = 
 }
 
 export function addressNotes(protocol: PlcProtocol, series: InovanceSeries = 'AM'): string {
+  if (protocol === 'omron_cip') return 'EtherNetIP 使用符号标签，固定小端。支持原子类型/数组及 Omron STRING（0x00D0）读取；字符串数组逐元素读取，并非原子快照。不支持 STRING 写入、UDT、打包 BOOL 数组、隐式 UDP I/O。路由在连接参数中设置；未做实机兼容性认证。'
+  if (isCipProtocol(protocol)) return 'EtherNetIP 使用符号标签，固定小端。支持原子类型/数组；不支持 STRING/UDT、打包 BOOL 数组、隐式 UDP I/O。路由在连接参数中设置。写入逐段确认，但不提供原子事务或自动重试；未做实机兼容性认证。'
   if (isInovanceProtocol(protocol)) return `${series} · 内置 Modbus TCP，默认数值字序 CDAB；AM/AC/AP 共用映射，EVO 不套用 SM/SD 扩展。字节解析不等于数值字序，MB 低字节在先。无 S7 STRING、EasyNet 或 EtherNet/IP；写前核对地址及型号。`
   if (protocol.startsWith('omron_')) return 'FINS 默认 CDAB，可在连接配置中修改。支持 D/CIO/W/H/A/EM；不支持三菱 M 地址、TIM/CNT、标签或 S7 STRING。批量字节解析按大端显示，32/64 位数值字序请与主读取核对；不是网络线帧。'
   if (protocol.startsWith('modbus_')) return '当前库与截图语法不同：x= 表示站号；不支持 s=、format=、w=、file=、100.1、H 后缀或自定义功能码。字节序在连接配置中设置；地址从 0 开始，40001 不会自动转成 HR0。'

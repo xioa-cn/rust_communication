@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NButton } from 'naive-ui'
 import type { ConnectRequest, PlcProtocol, ReadRequest, ReadResponse, WriteRequest, WriteResponse } from '../types'
-import { defaultAddress, isInovanceProtocol, isOmronProtocol, isReadOnlyAddress } from '../types'
+import { defaultAddress, isCipProtocol, isInovanceProtocol, isOmronProtocol, isReadOnlyAddress } from '../types'
 import { batchBytes, batchRequest, batchWriteRequest, formatBatch } from '../batchBuffer'
 import type { BatchFormat } from '../batchBuffer'
 import { parseHex } from '../workbench'
@@ -15,7 +15,7 @@ const props = defineProps<{
   write: (request: WriteRequest) => Promise<WriteResponse | null>;
   runTask: (name: string, job: () => Promise<boolean | void>) => Promise<void>;
 }>()
-const address = ref(defaultAddress(props.protocol, 'u16', props.configuration.inovance.series)), length = ref(10), rawText = ref('')
+const address = ref(isCipProtocol(props.protocol) ? 'Bytes[0]' : defaultAddress(props.protocol, 'u16', props.configuration.inovance.series)), length = ref(10), rawText = ref('')
 const parse = ref(false), format = ref<BatchFormat>('hex'), reverse = ref(false), perLine = ref(10), confirmed = ref(false)
 const elapsed = ref<number | null>(null), notice = ref(''), query = ref(''), regex = ref(false), searchBusy = ref(false), searchStatus = ref('')
 const selection = ref('—'), selectionIndex = ref(-1), resultArea = ref<HTMLTextAreaElement | null>(null)
@@ -27,12 +27,12 @@ const requestPreview = computed(() => {
 })
 const readOnly = computed(() => isReadOnlyAddress(props.protocol, address.value))
 const units = computed(() => requestPreview.value?.dataType === 'u16' ? '寄存器' : requestPreview.value?.dataType === 'bool' ? '线圈' : '字节')
-const interpretationHint = computed(() => isInovanceProtocol(props.protocol) ? '汇川字节数据；MB 按内存字节顺序，数值字序请与主读取核对。' : isOmronProtocol(props.protocol) ? 'FINS 字节数据；大端解析不含数值字序转换。' : units.value === '寄存器' ? '寄存器值按高字节在前展开；非原始线帧。' : '连续数据区读取；解析按大端，交换仅影响显示。')
+const interpretationHint = computed(() => isCipProtocol(props.protocol) ? 'EtherNetIP 批量字节仅适用于 USINT/BYTE 标签数组；数值解释按小端，不可将 DINT/REAL/STRING 标签当原始字节读取。' : isInovanceProtocol(props.protocol) ? '汇川字节数据；MB 按内存字节顺序，数值字序请与主读取核对。' : isOmronProtocol(props.protocol) ? 'FINS 字节数据；大端解析不含数值字序转换。' : units.value === '寄存器' ? '寄存器值按高字节在前展开；非原始线帧。' : '连续数据区读取；解析按大端，交换仅影响显示。')
 const display = computed(() => {
   if (!rawText.value.trim()) return { text: '', count: 0, error: '' }
   try {
     const bytes = parseHex(rawText.value)
-    return { text: formatBatch(bytes, parse.value ? format.value : 'hex', reverse.value, perLine.value), count: bytes.length, error: '' }
+    return { text: formatBatch(bytes, parse.value ? format.value : 'hex', reverse.value, perLine.value, isCipProtocol(props.protocol)), count: bytes.length, error: '' }
   } catch (cause) { return { text: '', count: 0, error: String(cause) } }
 })
 const writableView = computed(() => !parse.value && !reverse.value)

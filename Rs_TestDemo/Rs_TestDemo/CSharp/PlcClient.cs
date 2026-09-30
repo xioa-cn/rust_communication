@@ -212,6 +212,11 @@ namespace RsCommunication
             session = SessionHandle.CreateSerial(stream, options);
         }
 
+        private protected PlcClient(string ip, PlcCipOptions options, byte[] route)
+        {
+            session = SessionHandle.CreateCip(ip, options, route);
+        }
+
         public bool IsConnected => Use(handle =>
         {
             PlcNative.Check(PlcNative.IsConnected(handle, out byte connected));
@@ -528,6 +533,19 @@ namespace RsCommunication
                 {
                     PlcSerialCallbacks callbacks = adapter.Callbacks;
                     PlcNative.Check(PlcNative.CreateSerial(ref options, ref callbacks, out ulong value));
+                    session.Value = value;
+                    session.SetHandle(new IntPtr(1));
+                    return session;
+                }
+                catch { session.Dispose(); throw; }
+            }
+
+            internal static SessionHandle CreateCip(string ip, PlcCipOptions options, byte[] route)
+            {
+                var session = new SessionHandle();
+                try
+                {
+                    PlcNative.Check(CipNative.Create(ref options, ip, route, out ulong value));
                     session.Value = value;
                     session.SetHandle(new IntPtr(1));
                     return session;

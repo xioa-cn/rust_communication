@@ -20,9 +20,15 @@ pub enum PlcProtocol {
     OmronFinsTcp,
     OmronFinsUdp,
     InovanceModbusTcp,
+    OmronCip,
+    MelsecCip,
+    InovanceCip,
 }
 
 impl PlcProtocol {
+    pub fn is_cip(self) -> bool {
+        matches!(self, Self::OmronCip | Self::MelsecCip | Self::InovanceCip)
+    }
     pub fn is_omron(self) -> bool {
         matches!(self, Self::OmronFinsTcp | Self::OmronFinsUdp)
     }
@@ -47,6 +53,28 @@ pub enum ModbusByteOrder {
     Badc,
     Cdab,
     Dcba,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CipOptions {
+    pub connected: Option<bool>,
+    pub connection_size: Option<u16>,
+    pub route: Vec<u8>,
+    pub packet_interval_us: u32,
+    pub timeout_multiplier: u8,
+}
+
+impl Default for CipOptions {
+    fn default() -> Self {
+        Self {
+            connected: None,
+            connection_size: None,
+            route: Vec::new(),
+            packet_interval_us: 2_000_000,
+            timeout_multiplier: 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -228,6 +256,8 @@ pub struct ConnectRequest {
     pub omron: OmronOptions,
     #[serde(default)]
     pub inovance: InovanceOptions,
+    #[serde(default)]
+    pub cip: CipOptions,
     #[serde(default)]
     pub serial: SerialOptions,
 }
